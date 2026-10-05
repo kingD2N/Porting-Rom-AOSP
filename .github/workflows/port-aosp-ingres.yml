@@ -66,7 +66,7 @@ on:
       sepolicy_strict:
         description: "Build GAGAL kalau sepolicy gabungan (system donor + vendor ingres) tidak bisa di-compile"
         required: false
-        default: false
+        default: true
         type: boolean
       recovery_img_url:
         description: "Opsional: URL recovery.img custom (OrangeFox). Kosong = recovery HP tidak disentuh"

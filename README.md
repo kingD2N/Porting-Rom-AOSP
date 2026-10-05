@@ -84,7 +84,7 @@ images/super.img.zst            super (system/system_ext/product donor + vendor/
 | `disable_encryption` | `true` untuk test build pertama |
 | `rw_mount` | `true` (hanya partisi EXT4 yang dibangun ulang: system, system_ext, product, vendor, odm. `vendor_dlkm` dari base tetap read-only) |
 | `debug_adb` | `true` selama testing (adb hidup sejak boot) |
-| `sepolicy_strict` | `false` = cuma warning; `true` = gagalkan build kalau sepolicy gabungan error |
+| `sepolicy_strict` | `true` (default) = build gagal kalau sepolicy gabungan error (pasti bootloop); `false` = cuma warning |
 | `recovery_img_url` | kosongkan |
 | `release_repo` | kosong = Artifacts. `owner/repo` = GitHub Release (secret `RELEASE_TOKEN`) |
 | `gdrive_upload` | `true` = upload juga ke Google Drive lewat rclone (secret `RCLONE_CONFIG` = isi `rclone.conf`, folder di env `GDRIVE_REMOTE`) |
