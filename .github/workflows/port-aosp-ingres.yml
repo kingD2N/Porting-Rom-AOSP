@@ -39,9 +39,9 @@ on:
         default: ""
         type: string
       boot_img_url:
-        description: "Opsional: URL boot.img custom (kernel, mis. Templar/Melt). Kosong = boot.img ROM base"
+        description: "URL boot.img custom (default: kernel D2N 5.10.271-gki-MIX). Kosongkan = boot.img ROM base"
         required: false
-        default: ""
+        default: "https://github.com/kingD2N/ALL-PROJECT-D2N/releases/download/TES/boot.img"
         type: string
       disable_encryption:
         description: "Matikan fileencryption/metadata_encryption di fstab"

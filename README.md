@@ -33,7 +33,7 @@ Lalu `scripts/port.sh` mem-patch bagian yang biasanya bikin port gagal boot:
 - **Flash aman:** partisi kalibrasi/data (`persist`, `modemst1/2`, `fsg`, `frp`, ...) tidak pernah di-flash. Base fastboot Xiaomi: hanya image yang memang di-flash `flash_all.sh`.
 - **fstab & vbmeta:** enkripsi `/data` dimatikan (opsional), vendor/odm bisa rw, verity off. Partisi port selalu EROFS, jadi kalau fstab base cuma punya baris `ext4` untuk system/system_ext/product (umum di build AOSP), baris `erofs` ditambahkan otomatis. Sama untuk vendor/odm, karena bisa diturunkan ke EROFS kalau super tidak muat.
 - **Pengaman base:** kalau `ro.product.vendor.device` base bukan `ingres`, build dihentikan. Firmware base ikut di-flash, jadi salah base = brick.
-- **boot.img:** default kernel base. Isi `boot_img_url` untuk kernel custom (Templar/Melt): dicek punya ramdisk (ingres tanpa `init_boot`) dan seri kernel sama (5.10), karena modul di `vendor_boot`/`vendor_dlkm` dibuat untuk kernel itu.
+- **boot.img:** default memakai boot.img D2N ([`ALL-PROJECT-D2N` release `TES`](https://github.com/kingD2N/ALL-PROJECT-D2N/releases/download/TES/boot.img), kernel `5.10.271-gki-MIX`, header v4). Kosongkan `boot_img_url` untuk memakai kernel ROM base. Boot custom dicek punya ramdisk (ingres tanpa `init_boot`) dan seri kernel sama (5.10), karena modul di `vendor_boot`/`vendor_dlkm` dibuat untuk kernel itu.
 
 ## Memilih donor & base
 
@@ -71,7 +71,7 @@ images/super.img.zst            super (system/system_ext/product donor + vendor/
 | `ext4_partitions` | `vendor odm` (bisa diedit langsung di HP) |
 | `debloat` | path/package tambahan, pisah spasi. Boleh kosong |
 | `copy_from_base` | path dari base yang ikut disalin, mis. `product/overlay/FooIngres.apk`. APK `sharedUserId=android.uid.system` dilewati (beda kunci platform) |
-| `boot_img_url` | kernel custom, kosong = kernel base |
+| `boot_img_url` | default boot.img D2N (5.10.271-gki-MIX); kosongkan = kernel ROM base |
 | `disable_encryption` | `true` untuk test build pertama |
 | `rw_mount` | `true` |
 | `debug_adb` | `true` selama testing (adb hidup sejak boot) |
