@@ -26,7 +26,7 @@ Lalu `scripts/port.sh` mem-patch bagian yang biasanya bikin port gagal boot:
 - **Updater dibuang:** app OTA donor (Updater Lineage, dll) menawarkan update untuk device donor. Kalau ter-install di ingres = firmware/boot device lain = brick.
 - **VINTF, VNDK, linker:** sama seperti repo asal: matrix FCM level vendor disalin kalau donor tidak kenal, VNDK APEX dari base, `vendor-ndk` dideklarasikan, semua library vendor/odm dicek satu-satu.
 - **Cek tambahan (baru):**
-  - **sepolicy** (secilc 3.9 dibangun di workflow; secilc Ubuntu terlalu tua untuk CIL Android 16): kebijakan gabungan (system donor + vendor ingres) di-compile pakai `secilc` dengan urutan yang sama seperti `init` saat boot. Ini penyebab bootloop-ke-recovery paling umum saat base & donor beda basis (mis. vendor LineageOS + donor AOSP murni). `sepolicy_strict` = build gagal kalau tidak bisa di-compile.
+  - **sepolicy** (secilc 3.11 dibangun di workflow; secilc Ubuntu terlalu tua untuk CIL Android 16. Policycap yang belum dikenal secilc diabaikan khusus untuk cek ini): kebijakan gabungan (system donor + vendor ingres) di-compile pakai `secilc` dengan urutan yang sama seperti `init` saat boot. Ini penyebab bootloop-ke-recovery paling umum saat base & donor beda basis (mis. vendor LineageOS + donor AOSP murni). `sepolicy_strict` = build gagal kalau tidak bisa di-compile.
   - **checkvintf** `--check-compat` framework donor vs vendor ingres.
   - **ABI**: vendor ingres masih membawa library 32-bit. Kalau donor 64-bit only (tanpa `/system/lib`, mis. AOSPA/PenguinOS), dicari daemon/HAL 32-bit nyata di `vendor/bin` & `odm/bin` (cuma itu yang gagal start), dan `ro.product.product.cpu.abilist*` dipaksa 64-bit supaya framework tidak mengira 32-bit didukung. Service rc vendor/odm yang binary-nya 32-bit dinonaktifkan (`disabled`, `critical`/`reboot_on_failure` dan `start`/`exec_start`-nya dikomentari, ditandai `# [port-64only]`), karena binary itu tidak bisa jalan dan sebagian (mis. `boringssl_self_test32`) memicu reboot kalau gagal. Matikan dengan env `DISABLE_32BIT_SERVICES=false`.
   - **VINTF**: HAL framework yang diminta device matrix vendor tapi tidak ada di donor (mis. `vendor.qti.hardware.sigma_miracast` dari WFD Qualcomm) dijadikan `optional="true"` di matrix vendor/odm, jadi tidak ada dialog "internal problem". Matikan dengan `VINTF_RELAX=false`.
@@ -76,7 +76,7 @@ images/super.img.zst            super (system/system_ext/product donor + vendor/
 | `copy_from_base` | path dari base yang ikut disalin, mis. `product/overlay/FooIngres.apk`. APK `sharedUserId=android.uid.system` dilewati (beda kunci platform) |
 | `boot_img_url` | default boot.img D2N (5.10.271-gki-MIX); kosongkan = kernel ROM base |
 | `disable_encryption` | `true` untuk test build pertama |
-| `rw_mount` | `true` |
+| `rw_mount` | `true` (hanya partisi EXT4 yang dibangun ulang: system, system_ext, product, vendor, odm. `vendor_dlkm` dari base tetap read-only) |
 | `debug_adb` | `true` selama testing (adb hidup sejak boot) |
 | `sepolicy_strict` | `false` = cuma warning; `true` = gagalkan build kalau sepolicy gabungan error |
 | `recovery_img_url` | kosongkan |

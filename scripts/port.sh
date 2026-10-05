@@ -1134,7 +1134,20 @@ build_fstab_flags() {
     # shellcheck disable=SC2086  # daftar partisi sengaja di-split
     erofs_parts=$(printf '%s\n' $PORT_PARTITIONS vendor odm | awk '!s[$0]++' | tr '\n' ',')
     FSTAB_FLAGS+=" --erofs=${erofs_parts%,}"
-    if is_true "$RW_MOUNT"; then FSTAB_FLAGS+=" --rw=${EXT4_PARTITIONS// /,}"; fi
+    if is_true "$RW_MOUNT"; then
+        # rw HANYA untuk partisi yang dibangun ulang di sini (repack_ext4 rw = tanpa shared_blocks).
+        # Image base yang dipakai apa adanya (vendor_dlkm, ...) bisa ext4 shared_blocks /
+        # tanpa ruang: kernel menolak mount rw -> first-stage mount gagal = bootloop
+        local p rw_parts="" asis=""
+        for p in $EXT4_PARTITIONS; do
+            # shellcheck disable=SC2086
+            if in_list "$p" $PORT_PARTITIONS vendor odm; then rw_parts+="$p,"; else asis+="$p "; fi
+        done
+        if [[ -n $rw_parts ]]; then FSTAB_FLAGS+=" --rw=${rw_parts%,}"; fi
+        if [[ -n $asis ]]; then
+            log "rw: ${asis% } dipakai dari base apa adanya (tidak dibangun ulang) -> tetap read-only di fstab"
+        fi
+    fi
 }
 
 patch_fstab_file() {

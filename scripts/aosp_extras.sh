@@ -360,7 +360,34 @@ sepolicy_compile_check() {
     if [[ -f $B_FS/odm/etc/selinux/odm_sepolicy.cil ]]; then args+=("$B_FS/odm/etc/selinux/odm_sepolicy.cil"); fi
     log "sepolicy: secilc ${#args[@]} argumen, vendor plat version $ver"
     timeout 600 "$sc" "${args[@]}" -o "$WORK/sepolicy.compiled" -f /dev/null > "$WORK/secilc.log" 2>&1 || rc=$?
-    rm -f "$WORK/sepolicy.compiled"
+    # policycap baru (mis. functionfs_seclabel Android 16 QPR) yang belum dikenal secilc: itu
+    # hanya flag perilaku kernel, bukan type/atribut -> buang dari salinan sementara lalu ulangi,
+    # supaya cek kecocokan type vendor vs system tetap jalan
+    local cap at f i tries=0 tmpd="$WORK/sepol_tmp" skipped=()
+    while [[ $rc -ne 0 && $tries -lt 8 ]] && grep -q 'Invalid policycap' "$WORK/secilc.log"; do
+        tries=$((tries + 1))
+        cap=$(sed -n 's/.*Invalid policycap (\([A-Za-z0-9_]*\)).*/\1/p' "$WORK/secilc.log" | head -n1)
+        at=$(sed -n 's/.*Invalid policycap ([A-Za-z0-9_]*) at \(.*\):[0-9]*$/\1/p' "$WORK/secilc.log" | head -n1)
+        [[ -n $cap && -n $at && -f $at ]] || break
+        mkdir -p "$tmpd"
+        f=$at
+        if [[ $at != "$tmpd"/* ]]; then
+            f="$tmpd/${tries}_$(basename "$at")"
+            cp "$at" "$f"
+            for i in "${!args[@]}"; do
+                if [[ ${args[$i]} == "$at" ]]; then args[$i]=$f; fi
+            done
+        fi
+        grep -qE "^[[:space:]]*\(policycap[[:space:]]+${cap}[[:space:]]*\)" "$f" || break
+        sed -i -E "/^[[:space:]]*\(policycap[[:space:]]+${cap}[[:space:]]*\)/d" "$f"
+        skipped+=("$cap")
+        rc=0
+        timeout 600 "$sc" "${args[@]}" -o "$WORK/sepolicy.compiled" -f /dev/null > "$WORK/secilc.log" 2>&1 || rc=$?
+    done
+    if [[ ${#skipped[@]} -gt 0 ]]; then
+        log "sepolicy: policycap belum dikenal secilc ($sc), diabaikan HANYA untuk cek ini (di HP tetap dipakai init): ${skipped[*]}"
+    fi
+    rm -rf "$WORK/sepolicy.compiled" "$tmpd"
     if [[ $rc -eq 0 ]]; then
         ok "sepolicy: gabungan system donor + vendor ingres BERHASIL di-compile (seperti init saat boot)"
         return 0
@@ -370,7 +397,7 @@ sepolicy_compile_check() {
         warn "sepolicy: GAGAL compile - vendor/odm ingres merujuk type yang tidak ada di system/system_ext/product donor -> init gagal load sepolicy = bootloop ke recovery. Biasanya karena ROM base & donor beda basis (mis. LineageOS vs AOSP murni): pakai donor dengan basis sama dengan base"
         if is_true "$SEPOLICY_STRICT"; then die "sepolicy gabungan tidak bisa di-compile (SEPOLICY_STRICT=true)"; fi
     else
-        if grep -qiE 'Unknown permissionx kind|Invalid syntax|Unknown keyword|Unexpected' "$WORK/secilc.log"; then
+        if grep -qiE 'Unknown permissionx kind|Invalid policycap|Invalid syntax|Unknown keyword|Unexpected' "$WORK/secilc.log"; then
             warn "sepolicy: secilc ($sc) terlalu tua untuk CIL Android donor (sintaks baru tak dikenal), cek dilewati. Workflow membangun secilc terbaru di step 'Build secilc'; cek step itu"
         else
             warn "sepolicy: secilc gagal (rc=$rc) dengan error yang bukan resolve type - anggap informasi, bukan vonis"

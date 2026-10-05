@@ -147,14 +147,14 @@ jobs:
           aria2c --version | head -n1
           command -v secilc && secilc --help 2>&1 | head -n1 || true
 
-      - name: Build secilc terbaru (SELinux 3.9)
-        # secilc Ubuntu 24.04 (3.5) tidak kenal sintaks CIL Android 16 (allowx "nlmsg") ->
+      - name: Build secilc terbaru (SELinux 3.11)
+        # secilc Ubuntu 24.04 (3.5) tidak kenal sintaks CIL Android 16 (allowx "nlmsg", policycap baru) ->
         # cek compile sepolicy tidak bisa jalan. Tidak fatal: kalau gagal, port.sh pakai secilc apt.
         continue-on-error: true
         run: |
           set -euo pipefail
           sudo apt-get install -y -qq flex bison >/dev/null
-          v=3.9
+          v=3.11
           mkdir -p secilc-build && cd secilc-build
           base=https://github.com/SELinuxProject/selinux/releases/download/$v
           curl -fsSL -o libsepol.tgz "$base/libsepol-$v.tar.gz"
@@ -166,20 +166,20 @@ jobs:
           make -C "libsepol-$v" -j"$(nproc)" >/dev/null
           make -C "libsepol-$v" DESTDIR="$stage" PREFIX=/usr install >/dev/null
           # Makefile secilc selalu menambah "-lsepol" (override LDLIBS) dan runner tidak punya
-          # libsepol-dev -> folder -L yang HANYA berisi libsepol.a = link statis ke libsepol 3.9
+          # libsepol-dev -> folder -L yang HANYA berisi libsepol.a = link statis ke libsepol $v
           mkdir -p "$stage/static"
           cp "$(find "$stage/usr" -name libsepol.a | head -n1)" "$stage/static/"
           make -C "secilc-$v" -j"$(nproc)" secilc CFLAGS="-O2 -I$stage/usr/include" \
                LDFLAGS="-L$stage/static" >/dev/null
-          # uji sintaks Android 16: allowx ... nlmsg harus lolos
-          printf '%s\n' '(class netlink_route_socket (nlmsg))' '(classorder (netlink_route_socket))' \
+          # uji sintaks Android 16 (QPR): allowx nlmsg + policycap functionfs_seclabel harus lolos
+          printf '%s\n' '(policycap functionfs_seclabel)' '(class netlink_route_socket (nlmsg))' '(classorder (netlink_route_socket))' \
             '(sid kernel) (sidorder (kernel)) (user u) (role r) (type t) (category c0) (sensitivity s0)' \
             '(sensitivityorder (s0)) (sensitivitycategory s0 (c0)) (categoryorder (c0)) (level lvl (s0))' \
             '(userrole u r) (roletype r t) (userlevel u lvl) (userrange u (lvl lvl)) (sidcontext kernel (u r t (lvl lvl)))' \
             '(allow t self (netlink_route_socket (nlmsg)))' \
             '(allowx t self (nlmsg netlink_route_socket (range 0x10 0x12)))' > nlmsg_test.cil
           "./secilc-$v/secilc" -M true -c 33 -o /dev/null -f /dev/null nlmsg_test.cil \
-            && echo "secilc 3.9: sintaks nlmsg OK" || echo "::warning::secilc 3.9 belum mengenal nlmsg"
+            && echo "secilc $v: sintaks Android 16 (nlmsg, policycap) OK" || echo "::warning::secilc $v belum mengenal sintaks Android 16"
           "./secilc-$v/secilc" --help 2>&1 | head -n1 || true
           echo "SECILC=$PWD/secilc-$v/secilc" >> "$GITHUB_ENV"
 
