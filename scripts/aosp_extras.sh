@@ -243,6 +243,7 @@ copy_from_base() {
 # platform_app). sepolicy Lineage hanya mengizinkan platform_app/system_app memanggil HAL-nya ->
 # priv_app ditambahkan sebagai client lewat system_ext_sepolicy.cil donor (typeattributeset CIL
 # digabung, bukan menimpa). Hardware tetap disentuh HAL vendor base, persis seperti di LineageOS.
+PORT_CIL_TAG="; [port-base-app]"   # penanda baris CIL tambahan (dibuang lagi kalau compile gagal)
 base_app_hal_sepolicy() { # <package>
     local pkg=$1 cil="$P_FS/system_ext/etc/selinux/system_ext_sepolicy.cil" all=() f hal hals label added=""
     case $pkg in
@@ -250,7 +251,10 @@ base_app_hal_sepolicy() { # <package>
         org.lineageos.leds)     hals="leds";                   label="Leds (LED RGB)" ;;
         *) return 0 ;;
     esac
-    for f in "$P_FS/system/system/etc/selinux/plat_sepolicy.cil" "$cil" "$P_FS/product/etc/selinux/product_sepolicy.cil"; do
+    # atribut client bisa dideklarasikan di system_ext Lineage ATAU di plat_pub_versioned.cil vendor
+    # (sepolicy publik LineageOS ikut ke vendor) -> keduanya ikut di-compile init saat boot
+    for f in "$P_FS/system/system/etc/selinux/plat_sepolicy.cil" "$cil" "$P_FS/product/etc/selinux/product_sepolicy.cil" \
+             "$B_FS/vendor/etc/selinux/plat_pub_versioned.cil"; do
         if [[ -f $f ]]; then all+=("$f"); fi
     done
     if [[ ! -f $cil ]]; then
@@ -261,7 +265,7 @@ base_app_hal_sepolicy() { # <package>
         if grep -qF "(typeattribute hal_lineage_${hal}_client)" "${all[@]}"; then
             if ! grep -qF "(typeattributeset hal_lineage_${hal}_client (priv_app))" "$cil"; then
                 if [[ -n $(tail -c1 "$cil") ]]; then echo >> "$cil"; fi
-                printf '(typeattributeset hal_lineage_%s_client (priv_app))\n' "$hal" >> "$cil"
+                printf '(typeattributeset hal_lineage_%s_client (priv_app)) %s\n' "$hal" "$PORT_CIL_TAG" >> "$cil"
             fi
             added+="$hal "
         fi
@@ -354,7 +358,7 @@ abi_check() {
 # service ROM donor yang bisa me-reboot HP kalau crash (critical = 4x crash dalam 4 menit ->
 # reboot ke bootloader; reboot_on_failure = langsung reboot). Service AOSP standar dikenal;
 # sisanya (biasanya khas device donor, mis. marble) dilaporkan supaya bootloop mudah dilacak.
-RC_REBOOT_KNOWN="ueventd servicemanager hwservicemanager vndservicemanager keystore2 lmkd apexd apexd-bootstrap vold bpfloader logd netd statsd boringssl_self_test32 boringssl_self_test64 boringssl_self_test_apex32 boringssl_self_test_apex64"
+RC_REBOOT_KNOWN="ueventd servicemanager hwservicemanager vndservicemanager keystore2 lmkd apexd apexd-bootstrap vold bpfloader logd netd netd1shot statsd zygote zygote_secondary mmd boringssl_self_test32 boringssl_self_test64 boringssl_self_test_apex32 boringssl_self_test_apex64"
 rc_reboot_check() {
     local d out
     local dirs=()
@@ -515,6 +519,18 @@ sepolicy_compile_check() {
         rc=0
         timeout 600 "$sc" "${args[@]}" -o "$WORK/sepolicy.compiled" -f /dev/null > "$WORK/secilc.log" 2>&1 || rc=$?
     done
+    # baris tambahan port (izin HAL app base) ternyata bikin compile gagal -> buang, compile ulang.
+    # Lebih baik fitur GameKeys/Leds mati daripada sepolicy gagal dimuat (bootloop)
+    if [[ $rc -ne 0 ]] && grep -qF "$PORT_CIL_TAG" "$P_FS/system_ext/etc/selinux/system_ext_sepolicy.cil" 2>/dev/null; then
+        local xc="$P_FS/system_ext/etc/selinux/system_ext_sepolicy.cil"
+        grep -vF "$PORT_CIL_TAG" "$xc" > "$WORK/xc.tmp" || true
+        cat "$WORK/xc.tmp" > "$xc"; rm -f "$WORK/xc.tmp"
+        rc=0
+        timeout 600 "$sc" "${args[@]}" -o "$WORK/sepolicy.compiled" -f /dev/null > "$WORK/secilc.log" 2>&1 || rc=$?
+        if [[ $rc -eq 0 ]]; then
+            warn "sepolicy: izin HAL untuk app dari base (GameKeys/Leds) bikin compile gagal -> dibuang; sepolicy kembali aman, fitur itu tidak berfungsi"
+        fi
+    fi
     if [[ ${#skipped[@]} -gt 0 ]]; then
         log "sepolicy: policycap belum dikenal secilc ($sc), diabaikan HANYA untuk cek ini (di HP tetap dipakai init): ${skipped[*]}"
     fi
