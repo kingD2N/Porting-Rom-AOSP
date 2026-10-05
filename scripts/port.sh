@@ -131,17 +131,37 @@ source "$SCRIPT_DIR/aosp_extras.sh"
 # unduh langsung lewat dl_helper.py. Hasil download yang ternyata HTML ditolak dengan alasan jelas.
 dl_tool() { python3 "$SCRIPT_DIR/dl_helper.py" "$@"; }
 
-dl_raw() { # url out (aria2c multi-koneksi; Google Drive & MediaFire pakai curl, server menolak multi-koneksi)
-    local url=$1 out=$2 h
+dl_curl() { # url out
+    curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors --connect-timeout 30 \
+         -A "${DL_UA:-Wget/1.21.4}" -c "$WORK/cookies.txt" -b "$WORK/cookies.txt" -o "$2" "$1" >&2
+}
+
+dl_raw() { # url out
+    # aria2c multi-koneksi untuk host biasa; kalau gagal (mirror menolak multi-koneksi / UA aria2,
+    # mis. SourceForge "ERR 0B/s") otomatis diulang pakai curl satu koneksi.
+    # Google Drive & MediaFire selalu curl (butuh cookie + halaman konfirmasi).
+    local url=$1 out=$2 h final
     h=$(dl_tool host "$url")
-    rm -f "$out"
-    if command -v aria2c >/dev/null && [[ $h != gdrive && $h != mediafire ]]; then
-        aria2c -x16 -s16 -k1M --file-allocation=none --console-log-level=warn --allow-overwrite=true \
-               --summary-interval=60 -d "$(dirname "$out")" -o "$(basename "$out")" "$url" >&2
-    else
-        curl -fsSL --retry 3 --retry-delay 5 -c "$WORK/cookies.txt" -b "$WORK/cookies.txt" \
-             -o "$out" "$url" >&2
+    rm -f "$out" "$out.aria2"
+    if [[ $h == sourceforge ]]; then
+        # /download -> redirect ke mirror bertoken; ambil URL final supaya aria2c langsung ke mirror
+        final=$(curl -sSIL -o /dev/null -w '%{url_effective}' --max-time 120 -A "${DL_UA:-Wget/1.21.4}" "$url" 2>/dev/null || true)
+        if [[ $final =~ ^https?:// && $final != *sourceforge.net/projects/* ]]; then
+            log "  sourceforge mirror: ${final%%\?*}" >&2
+            url=$final
+        fi
     fi
+    if command -v aria2c >/dev/null && [[ $h != gdrive && $h != mediafire ]]; then
+        if aria2c -x8 -s8 -k1M --file-allocation=none --console-log-level=warn --allow-overwrite=true \
+               --max-tries=5 --retry-wait=5 -U "${DL_UA:-Wget/1.21.4}" \
+               --summary-interval=60 -d "$(dirname "$out")" -o "$(basename "$out")" "$url" >&2; then
+            return 0
+        fi
+        warn "aria2c gagal untuk $(basename "$out"), diulang pakai curl (satu koneksi, lebih lambat)"
+        rm -f "$out" "$out.aria2"
+        url=${final:-$1}
+    fi
+    dl_curl "$url" "$out"
 }
 
 fetch() { # src dest_dir name -> echo path
@@ -179,7 +199,7 @@ check_url() { # label url  (cek cepat: bisa diakses + bukan halaman HTML, sebelu
     url=$(dl_tool normalize "$src"); h=$(dl_tool host "$src")
     name=${src%%\?*}; name=${name##*/}
     tmp="$WORK/check_$label.bin"
-    code=$(curl -sL -r 0-511 -o "$tmp" -w '%{http_code}' --retry 2 --max-time 90 "$url" || echo 000)
+    code=$(curl -sL -r 0-511 -o "$tmp" -w '%{http_code}' --retry 2 --max-time 90 -A "${DL_UA:-Wget/1.21.4}" "$url" || echo 000)
     case $code in
         200|206) ;;
         404) die "$label: file tidak ditemukan (HTTP 404): $src" ;;
