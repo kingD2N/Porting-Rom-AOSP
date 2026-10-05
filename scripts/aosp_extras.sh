@@ -175,7 +175,7 @@ fcm_from_base() {
 
 # COPY_FROM_BASE: path bebas dari base (product/..., system_ext/..., system/...)
 copy_from_base() {
-    local items=() extras=() rel part sub src dst tmp apk info uid pkg n=0 donor_pkgs="" hal_apps=()
+    local items=() extras=() rel part sub src dst tmp apk info uid pkg hpkg n=0 donor_pkgs="" hal_apps=()
     read -r -a items <<< "$COPY_FROM_BASE"
     if is_true "${BASE_EXTRAS:-false}"; then
         read -r -a extras <<< "${BASE_EXTRA_PATHS:-}"
@@ -218,7 +218,10 @@ copy_from_base() {
                 warn "COPY_FROM_BASE: $rel (${info%%$'\t'*}) memakai sharedUserId=$uid -> wajib kunci platform ROM base, PackageManager ROM donor akan menolaknya. Dilewati"
                 continue
             fi
-            case ${info%%$'\t'*} in org.lineageos.gamekeys|org.lineageos.leds) hal_apps+=("${info%%$'\t'*}") ;; esac
+        fi
+        hpkg=""
+        if [[ -n $apk ]]; then
+            case ${info%%$'\t'*} in org.lineageos.gamekeys|org.lineageos.leds) hpkg=${info%%$'\t'*} ;; esac
         fi
         rm -rf "$dst"; mkdir -p "$(dirname "$dst")"; cp -a "$src" "$dst"
         # oat/ (odex/vdex) dikompilasi terhadap framework ROM base -> basi di ROM donor. Dibuang kalau
@@ -229,6 +232,21 @@ copy_from_base() {
             else
                 warn "COPY_FROM_BASE: $rel tanpa classes.dex (dex di-strip), oat dari ROM base dipakai - app bisa gagal jalan di ROM donor"
             fi
+        fi
+        # app hardware LineageOS: kunci platform base (Ingres-Centre) != kunci donor. Kalau donor memakai
+        # test-key AOSP publik, app ditandatangani ulang dengan kunci itu -> jadi platform_app dan izin
+        # signature-nya terpenuhi. GameKeys WAJIB begitu: EventListenerService.onCreate memanggil
+        # registerTaskStackListener (MANAGE_ACTIVITY_TASKS = signature|recents) tanpa try/catch ->
+        # tanpa kunci platform app crash berulang (persistent) dan tombol bahu tetap tidak jalan.
+        if [[ -n $hpkg ]]; then
+            if platform_resign "$dst"; then
+                ok "$hpkg: ditandatangani ulang dengan kunci platform donor (test-key AOSP) -> platform_app"
+            elif [[ $hpkg == org.lineageos.gamekeys ]]; then
+                rm -rf "$dst"
+                warn "GameKeys (tombol bahu) TIDAK disalin: butuh izin MANAGE_ACTIVITY_TASKS (signature) = kunci platform ROM donor, sedangkan donor ditandatangani kunci privat ($DONOR_PLATFORM_CERT). Tanpa itu app crash berulang"
+                continue
+            fi
+            hal_apps+=("$hpkg")
         fi
         n=$((n + 1)); ok "COPY_FROM_BASE: $rel disalin"
         if [[ $rel == */priv-app/* && $part != system ]]; then base_privapp_perms "$rel"; fi
@@ -243,6 +261,48 @@ copy_from_base() {
 # platform_app). sepolicy Lineage hanya mengizinkan platform_app/system_app memanggil HAL-nya ->
 # priv_app ditambahkan sebagai client lewat system_ext_sepolicy.cil donor (typeattributeset CIL
 # digabung, bukan menimpa). Hardware tetap disentuh HAL vendor base, persis seperti di LineageOS.
+# Kunci platform test-key AOSP (publik, build/make/target/product/security). Dipakai HANYA kalau
+# framework-res.apk donor ditandatangani sertifikat yang sama persis (dicek SHA-256).
+AOSP_TESTKEY_PLATFORM_SHA256=c8a2e9bccf597c2fb6dc66bee293fc13f2fc47ec77bc6b2b0d52c11f51192ab8
+AOSP_TESTKEY_URLS="https://raw.githubusercontent.com/aosp-mirror/platform_build/main/target/product/security https://android.googlesource.com/platform/build/+/refs/heads/main/target/product/security"
+DONOR_PLATFORM_CERT=""
+platform_resign() { # <dir app>; 0 = APK sudah ditandatangani ulang dengan kunci platform donor
+    local dir=$1 apk kd="$WORK/aosp_testkey" u f got
+    apk=$(find "$dir" -maxdepth 1 -name '*.apk' | head -n1)
+    [[ -n $apk ]] || return 1
+    if ! command -v apksigner >/dev/null; then DONOR_PLATFORM_CERT="apksigner tidak ada"; return 1; fi
+    if [[ -z $DONOR_PLATFORM_CERT ]]; then
+        DONOR_PLATFORM_CERT=$(apksigner verify --print-certs "$P_FS/system/system/framework/framework-res.apk" 2>/dev/null \
+            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n1 || true)
+        DONOR_PLATFORM_CERT=${DONOR_PLATFORM_CERT:-tidak terbaca}
+        log "kunci platform donor: $DONOR_PLATFORM_CERT"
+    fi
+    [[ $DONOR_PLATFORM_CERT == "$AOSP_TESTKEY_PLATFORM_SHA256" ]] || return 1
+    if [[ ! -s $kd/platform.pk8 ]]; then
+        mkdir -p "$kd"
+        for u in $AOSP_TESTKEY_URLS; do
+            for f in platform.pk8 platform.x509.pem; do
+                if [[ $u == *googlesource* ]]; then
+                    curl -fsSL --retry 2 "$u/$f?format=TEXT" | base64 -d > "$kd/$f" 2>/dev/null || true
+                else
+                    curl -fsSL --retry 2 -o "$kd/$f" "$u/$f" || true
+                fi
+            done
+            got=$(openssl x509 -in "$kd/platform.x509.pem" -noout -fingerprint -sha256 2>/dev/null \
+                | sed 's/.*=//; s/://g' | tr 'A-F' 'a-f' || true)
+            if [[ $got == "$AOSP_TESTKEY_PLATFORM_SHA256" && -s $kd/platform.pk8 ]]; then break; fi
+            rm -f "$kd/platform.pk8" "$kd/platform.x509.pem"
+        done
+        if [[ ! -s $kd/platform.pk8 ]]; then warn "test-key AOSP gagal diunduh / tidak cocok"; return 1; fi
+    fi
+    if ! apksigner sign --key "$kd/platform.pk8" --cert "$kd/platform.x509.pem" --out "$apk.signed" "$apk" >/dev/null 2>"$WORK/apksigner.log"; then
+        warn "apksigner gagal: $(head -n1 "$WORK/apksigner.log")"; rm -f "$apk.signed"; return 1
+    fi
+    mv "$apk.signed" "$apk"; rm -f "$apk.signed.idsig"
+    chmod 644 "$apk"
+    return 0
+}
+
 PORT_CIL_TAG="; [port-base-app]"   # penanda baris CIL tambahan (dibuang lagi kalau compile gagal)
 base_app_hal_sepolicy() { # <package>
     local pkg=$1 cil="$P_FS/system_ext/etc/selinux/system_ext_sepolicy.cil" all=() f hal hals label added=""
@@ -263,15 +323,15 @@ base_app_hal_sepolicy() { # <package>
     fi
     for hal in $hals; do
         if grep -qF "(typeattribute hal_lineage_${hal}_client)" "${all[@]}"; then
-            if ! grep -qF "(typeattributeset hal_lineage_${hal}_client (priv_app))" "$cil"; then
+            if ! grep -qF "(typeattributeset hal_lineage_${hal}_client (priv_app platform_app))" "$cil"; then
                 if [[ -n $(tail -c1 "$cil") ]]; then echo >> "$cil"; fi
-                printf '(typeattributeset hal_lineage_%s_client (priv_app)) %s\n' "$hal" "$PORT_CIL_TAG" >> "$cil"
+                printf '(typeattributeset hal_lineage_%s_client (priv_app platform_app)) %s\n' "$hal" "$PORT_CIL_TAG" >> "$cil"
             fi
             added+="$hal "
         fi
     done
     if [[ " $added" == *" ${hals%% *} "* ]]; then
-        ok "$label: priv_app jadi client HAL ${added% } di sepolicy system_ext donor"
+        ok "$label: priv_app/platform_app jadi client HAL ${added% } di sepolicy system_ext donor"
     else
         warn "$label: sepolicy donor tidak mengenal HAL vendor.lineage.${hals%% *}, app tersalin tapi kemungkinan tidak berfungsi"
     fi
