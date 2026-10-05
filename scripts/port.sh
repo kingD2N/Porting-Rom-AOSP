@@ -611,6 +611,19 @@ vintf_device_check() {
     done
     python3 "$SCRIPT_DIR/vintf_check.py" "${args[@]}" > "$WORK/vintf_device.log" 2>&1 || true
     while IFS= read -r d; do printf '    %s\n' "$d"; done < "$WORK/vintf_device.log"
+    # HAL framework yang diminta vendor tapi tidak ada di donor (mis. sigma_miracast Qualcomm WFD):
+    # dijadikan optional di device matrix vendor/odm -> tidak ada dialog "internal problem";
+    # fiturnya sendiri memang tidak tersedia di ROM donor.
+    local relax_hals=() hal mats=()
+    while IFS= read -r hal; do relax_hals+=(--hal "$hal"); done < <(sed -n 's/^MISSING HAL framework \([^ ]*\) .*/\1/p' "$WORK/vintf_device.log")
+    if [[ ${#relax_hals[@]} -gt 0 ]] && is_true "${VINTF_RELAX:-true}"; then
+        while IFS= read -r -d '' f; do mats+=("$f"); done \
+            < <(find "$B_FS/vendor/etc/vintf" "$B_FS/odm/etc/vintf" -maxdepth 1 -type f -name 'compatibility_matrix*.xml' -print0 2>/dev/null || true)
+        python3 "$SCRIPT_DIR/vintf_relax.py" "${relax_hals[@]}" "${mats[@]}" > "$WORK/vintf_relax.log" 2>&1 || true
+        grep -v '^RESULT' "$WORK/vintf_relax.log" || true
+        ok "VINTF: HAL framework yang tidak ada di donor dijadikan optional di device matrix vendor: $(printf '%s ' "${relax_hals[@]}" | sed 's/--hal //g')(fiturnya tidak tersedia, tanpa dialog 'internal problem')"
+        python3 "$SCRIPT_DIR/vintf_check.py" "${args[@]}" > "$WORK/vintf_device.log" 2>&1 || true
+    fi
     n=$(sed -n 's/^RESULT //p' "$WORK/vintf_device.log" | tail -n1)
     if [[ ${n:-0} =~ ^[0-9]+$ ]] && (( ${n:-0} > 0 )); then
         warn "VINTF: $n kebutuhan device matrix vendor tidak dipenuhi framework port -> dialog 'internal problem' / HAL terkait gagal (lihat MISSING)"

@@ -160,9 +160,13 @@ jobs:
           curl -fsSL -o libsepol.tgz "$base/libsepol-$v.tar.gz"
           curl -fsSL -o secilc.tgz "$base/secilc-$v.tar.gz"
           tar xzf libsepol.tgz && tar xzf secilc.tgz
+          # libsepol di-install ke staging: header cil baru tersusun sebagai sepol/cil/*.h saat install
+          # (di source ada di cil/include/cil/), libsepol.a di-link statis ke secilc
+          stage="$PWD/stage"
           make -C "libsepol-$v" -j"$(nproc)" >/dev/null
-          make -C "secilc-$v" -j"$(nproc)" secilc CFLAGS="-O2 -I$PWD/libsepol-$v/include" \
-               LDLIBS="$PWD/libsepol-$v/src/libsepol.a" >/dev/null
+          make -C "libsepol-$v" DESTDIR="$stage" PREFIX=/usr install >/dev/null
+          make -C "secilc-$v" -j"$(nproc)" secilc CFLAGS="-O2 -I$stage/usr/include" \
+               LDLIBS="$(find "$stage" -name libsepol.a | head -n1)" >/dev/null
           "./secilc-$v/secilc" --help 2>&1 | head -n1 || true
           echo "SECILC=$PWD/secilc-$v/secilc" >> "$GITHUB_ENV"
 

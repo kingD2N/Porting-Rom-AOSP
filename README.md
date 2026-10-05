@@ -28,7 +28,8 @@ Lalu `scripts/port.sh` mem-patch bagian yang biasanya bikin port gagal boot:
 - **Cek tambahan (baru):**
   - **sepolicy** (secilc 3.9 dibangun di workflow; secilc Ubuntu terlalu tua untuk CIL Android 16): kebijakan gabungan (system donor + vendor ingres) di-compile pakai `secilc` dengan urutan yang sama seperti `init` saat boot. Ini penyebab bootloop-ke-recovery paling umum saat base & donor beda basis (mis. vendor LineageOS + donor AOSP murni). `sepolicy_strict` = build gagal kalau tidak bisa di-compile.
   - **checkvintf** `--check-compat` framework donor vs vendor ingres.
-  - **ABI**: vendor ingres masih membawa library 32-bit. Kalau donor 64-bit only (tanpa `/system/lib`, mis. AOSPA/PenguinOS), dicari daemon/HAL 32-bit nyata di `vendor/bin` & `odm/bin` (cuma itu yang gagal start), dan `ro.product.product.cpu.abilist*` dipaksa 64-bit supaya framework tidak mengira 32-bit didukung.
+  - **ABI**: vendor ingres masih membawa library 32-bit. Kalau donor 64-bit only (tanpa `/system/lib`, mis. AOSPA/PenguinOS), dicari daemon/HAL 32-bit nyata di `vendor/bin` & `odm/bin` (cuma itu yang gagal start), dan `ro.product.product.cpu.abilist*` dipaksa 64-bit supaya framework tidak mengira 32-bit didukung. Service rc vendor/odm yang binary-nya 32-bit dinonaktifkan (`disabled`, `critical`/`reboot_on_failure` dan `start`/`exec_start`-nya dikomentari, ditandai `# [port-64only]`), karena binary itu tidak bisa jalan dan sebagian (mis. `boringssl_self_test32`) memicu reboot kalau gagal. Matikan dengan env `DISABLE_32BIT_SERVICES=false`.
+  - **VINTF**: HAL framework yang diminta device matrix vendor tapi tidak ada di donor (mis. `vendor.qti.hardware.sigma_miracast` dari WFD Qualcomm) dijadikan `optional="true"` di matrix vendor/odm, jadi tidak ada dialog "internal problem". Matikan dengan `VINTF_RELAX=false`.
   - **IMS**: donor tanpa IMS Qualcomm (`org.codeaurora.ims`) ditandai (VoLTE/VoWiFi mati).
 - **vendor_boot v4 berfragmen:** first-stage fstab dipatch per fragmen (platform/dlkm/recovery) oleh `scripts/vendor_boot_fstab.py`, tabel fragmen & ukuran ikut diperbarui. (magiskboot toolkit menggabung semua fragmen jadi satu dan tidak memperbarui tabel -> modul dlkm rusak -> bootloop; LineageOS/AxionOS sm8450 memakai fragmen `dlkm`.)
 - **Cek ekstrak per path:** setiap entri `fs_config` dicek ada di disk; entri sintetis `lost+found` dari imgextractor (ext4) diabaikan, jadi partisi kecil seperti `odm` ext4 tidak gagal palsu.
@@ -162,6 +163,8 @@ scripts/apk_index.py                     baca package & sharedUserId APK
 scripts/vendor_boot_fstab.py             patch fstab first-stage di vendor_boot v3/v4 (per fragmen)
 scripts/fsconfig_check.py                cek hasil ekstrak per path + bersihkan fs_config
 scripts/elf_scan.py                      cari executable 32-bit di vendor/odm (donor 64-bit only)
+scripts/vintf_relax.py                   jadikan optional HAL framework yang tidak ada di donor (device matrix vendor)
+scripts/rc_disable32.py                  nonaktifkan service rc vendor/odm yang binary-nya 32-bit (donor 64-bit only)
 scripts/dl_helper.py                     link Google Drive/SourceForge/Pixeldrain/MediaFire -> unduh langsung, tolak HTML
 scripts/build_rro.sh                     build RRO dari rro/ -> devices/ingres/product/overlay/
 rro/                                     sumber RRO ingres (res/ + manifest, dari device tree)

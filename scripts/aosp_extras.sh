@@ -248,9 +248,27 @@ abi_check() {
     n=$(sed -n 's/^RESULT //p' <<< "$res" | tail -n1)
     if [[ $n == 0 ]]; then
         ok "ABI: system donor 64-bit only, vendor ingres tidak punya daemon/HAL 32-bit (library 32-bit vendor tidak terpakai)"
+    elif [[ ! $n =~ ^[0-9]+$ ]]; then
+        warn "ABI: scan executable 32-bit vendor gagal, cek manual vendor/bin"
     else
-        warn "ABI: system donor 64-bit only, tapi vendor ingres punya ${n} executable 32-bit -> proses ini gagal start (cek fiturnya setelah boot):"
-        grep -v '^RESULT' <<< "$res" | head -n 20 | while IFS= read -r line; do printf '    %s\n' "$line" >&2; done
+        # binary 32-bit tidak bisa jalan sama sekali (tanpa linker/libc 32-bit). Service-nya
+        # dinonaktifkan di rc vendor/odm: tanpa ini service ber-"critical"/"reboot_on_failure"
+        # (mis. boringssl_self_test32) memicu reboot berulang.
+        local exes=() rel rcres
+        while IFS= read -r rel; do
+            [[ -n $rel && $rel != RESULT* ]] || continue
+            exes+=(--exe "/$rel")
+            if [[ $rel == odm/* ]]; then exes+=(--exe "/vendor/$rel"); fi
+        done <<< "$res"
+        log "ABI: system donor 64-bit only, vendor ingres punya $n executable 32-bit (tidak bisa jalan):"
+        grep -v '^RESULT' <<< "$res" | head -n 20 | while IFS= read -r line; do printf '    %s\n' "$line"; done
+        if is_true "${DISABLE_32BIT_SERVICES:-true}"; then
+            rcres=$(python3 "$SCRIPT_DIR/rc_disable32.py" "${exes[@]}" "$B_FS/vendor/etc/init" "$B_FS/odm/etc/init" 2>&1 || true)
+            grep -vE '^(RESULT|SERVICE) ' <<< "$rcres" | while IFS= read -r line; do printf '%s\n' "$line"; done
+            ok "ABI: service 32-bit dinonaktifkan di rc vendor/odm ($(sed -n 's/^RESULT //p' <<< "$rcres" | awk '{print $1" service, "$2" baris"}')): $(sed -n 's/^SERVICE \([^ ]*\).*/\1/p' <<< "$rcres" | tr '\n' ' ')- fitur terkait tidak tersedia, tapi tidak lagi memicu reboot/restart berulang"
+        else
+            warn "ABI: $n executable 32-bit vendor dibiarkan (DISABLE_32BIT_SERVICES=false) -> gagal start; yang ber-reboot_on_failure bisa bootloop"
+        fi
     fi
     # vendor mengiklankan ABI 32-bit (ro.vendor.product.cpu.abilist32). init memakai partisi
     # prioritas tertinggi yang mengisi abilist (product > odm > vendor > system) -> paksa 64-bit
@@ -260,7 +278,12 @@ abi_check() {
         set_prop "$pp" ro.product.product.cpu.abilist arm64-v8a
         set_prop "$pp" ro.product.product.cpu.abilist64 arm64-v8a
         set_prop "$pp" ro.product.product.cpu.abilist32 ""
-        ok "ABI: ro.product.product.cpu.abilist=arm64-v8a (abilist32 kosong) di product, cocok dengan system donor"
+        # kalau ada partisi yang mengisi ro.product.cpu.abilist langsung, init melewati penurunan
+        # per partisi -> isi juga yang global (product dimuat terakhir, menang)
+        set_prop "$pp" ro.product.cpu.abilist arm64-v8a
+        set_prop "$pp" ro.product.cpu.abilist64 arm64-v8a
+        set_prop "$pp" ro.product.cpu.abilist32 ""
+        ok "ABI: abilist = arm64-v8a, abilist32 kosong (product), cocok dengan system donor 64-bit only"
     fi
 }
 
