@@ -175,7 +175,7 @@ fcm_from_base() {
 
 # COPY_FROM_BASE: path bebas dari base (product/..., system_ext/..., system/...)
 copy_from_base() {
-    local items=() extras=() rel part sub src dst tmp apk info uid pkg n=0 donor_pkgs="" gamekeys=false
+    local items=() extras=() rel part sub src dst tmp apk info uid pkg n=0 donor_pkgs="" hal_apps=()
     read -r -a items <<< "$COPY_FROM_BASE"
     if is_true "${BASE_EXTRAS:-false}"; then
         read -r -a extras <<< "${BASE_EXTRA_PATHS:-}"
@@ -218,7 +218,7 @@ copy_from_base() {
                 warn "COPY_FROM_BASE: $rel (${info%%$'\t'*}) memakai sharedUserId=$uid -> wajib kunci platform ROM base, PackageManager ROM donor akan menolaknya. Dilewati"
                 continue
             fi
-            if [[ ${info%%$'\t'*} == org.lineageos.gamekeys ]]; then gamekeys=true; fi
+            case ${info%%$'\t'*} in org.lineageos.gamekeys|org.lineageos.leds) hal_apps+=("${info%%$'\t'*}") ;; esac
         fi
         rm -rf "$dst"; mkdir -p "$(dirname "$dst")"; cp -a "$src" "$dst"
         # oat/ (odex/vdex) dikompilasi terhadap framework ROM base -> basi di ROM donor. Dibuang kalau
@@ -235,23 +235,29 @@ copy_from_base() {
     done
     rm -rf "$WORK"/base_copy_*
     ok "COPY_FROM_BASE: $n path disalin"
-    if is_true "$gamekeys"; then gamekeys_sepolicy; fi
+    for pkg in "${hal_apps[@]}"; do base_app_hal_sepolicy "$pkg"; done
 }
 
-# GameKeys dari base ditandatangani kunci platform LineageOS; di ROM donor kuncinya beda, jadi
-# app berjalan sebagai priv_app (bukan platform_app). sepolicy Lineage hanya mengizinkan
-# platform_app/system_app memanggil HAL gamekeys & touchinjector -> priv_app ditambahkan sebagai
-# client lewat system_ext_sepolicy.cil donor (typeattributeset CIL digabung, bukan menimpa).
-gamekeys_sepolicy() {
-    local cil="$P_FS/system_ext/etc/selinux/system_ext_sepolicy.cil" all=() f hal added=""
+# Aplikasi hardware LineageOS dari base (GameKeys = tombol bahu, Leds = LED RGB belakang) ditandatangani
+# kunci platform LineageOS; di ROM donor kuncinya beda, jadi app berjalan sebagai priv_app (bukan
+# platform_app). sepolicy Lineage hanya mengizinkan platform_app/system_app memanggil HAL-nya ->
+# priv_app ditambahkan sebagai client lewat system_ext_sepolicy.cil donor (typeattributeset CIL
+# digabung, bukan menimpa). Hardware tetap disentuh HAL vendor base, persis seperti di LineageOS.
+base_app_hal_sepolicy() { # <package>
+    local pkg=$1 cil="$P_FS/system_ext/etc/selinux/system_ext_sepolicy.cil" all=() f hal hals label added=""
+    case $pkg in
+        org.lineageos.gamekeys) hals="gamekeys touchinjector"; label="GameKeys (tombol bahu)" ;;
+        org.lineageos.leds)     hals="leds";                   label="Leds (LED RGB)" ;;
+        *) return 0 ;;
+    esac
     for f in "$P_FS/system/system/etc/selinux/plat_sepolicy.cil" "$cil" "$P_FS/product/etc/selinux/product_sepolicy.cil"; do
         if [[ -f $f ]]; then all+=("$f"); fi
     done
     if [[ ! -f $cil ]]; then
-        warn "GameKeys: system_ext_sepolicy.cil donor tidak ada, izin HAL tidak ditambahkan (tombol bahu tidak akan berfungsi)"
+        warn "$label: system_ext_sepolicy.cil donor tidak ada, izin HAL tidak ditambahkan (fitur tidak akan berfungsi)"
         return 0
     fi
-    for hal in gamekeys touchinjector; do
+    for hal in $hals; do
         if grep -qF "(typeattribute hal_lineage_${hal}_client)" "${all[@]}"; then
             if ! grep -qF "(typeattributeset hal_lineage_${hal}_client (priv_app))" "$cil"; then
                 if [[ -n $(tail -c1 "$cil") ]]; then echo >> "$cil"; fi
@@ -260,10 +266,10 @@ gamekeys_sepolicy() {
             added+="$hal "
         fi
     done
-    if [[ $added == *gamekeys* ]]; then
-        ok "GameKeys: priv_app jadi client HAL ${added% } di sepolicy system_ext donor (tombol bahu)"
+    if [[ " $added" == *" ${hals%% *} "* ]]; then
+        ok "$label: priv_app jadi client HAL ${added% } di sepolicy system_ext donor"
     else
-        warn "GameKeys: sepolicy donor tidak mengenal HAL vendor.lineage.gamekeys, app tersalin tapi tombol bahu kemungkinan tidak berfungsi"
+        warn "$label: sepolicy donor tidak mengenal HAL vendor.lineage.${hals%% *}, app tersalin tapi kemungkinan tidak berfungsi"
     fi
 }
 

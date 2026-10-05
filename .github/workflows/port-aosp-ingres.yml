@@ -39,7 +39,7 @@ on:
         default: ""
         type: string
       base_extras:
-        description: "Salin fitur khas ingres dari ROM base LineageOS: GameKeys (tombol bahu) + Aperture (kamera)"
+        description: "Salin fitur hardware ingres dari base LineageOS: GameKeys (tombol bahu) + Leds (LED RGB) + Aperture (kamera)"
         required: false
         default: true
         type: boolean

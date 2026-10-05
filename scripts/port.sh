@@ -39,9 +39,10 @@ COPY_FROM_BASE=${COPY_FROM_BASE:-""}
 # fitur khas ingres di ROM base LineageOS yang ikut hilang karena system_ext/product diganti donor.
 # Disalin otomatis kalau ADA di base dan package-nya BELUM ada di donor (path yang tidak ada dilewati diam-diam):
 #   GameKeys = tombol bahu (shoulder trigger) POCO F4 GT -> HAL vendor.lineage.gamekeys + touchinjector
+#   Leds     = LED RGB belakang (aw22xxx) -> HAL vendor.lineage.leds
 #   Aperture = aplikasi kamera LineageOS (Camera2 standar, cocok dengan vendor kamera base)
 BASE_EXTRAS=${BASE_EXTRAS:-true}
-BASE_EXTRA_PATHS=${BASE_EXTRA_PATHS:-"system_ext/priv-app/GameKeys product/app/Aperture product/etc/sysconfig/preinstalled-packages-org.lineageos.aperture.xml product/etc/sysconfig/initial-package-stopped-states-org.lineageos.aperture.xml"}
+BASE_EXTRA_PATHS=${BASE_EXTRA_PATHS:-"system_ext/priv-app/GameKeys system_ext/priv-app/Leds product/app/Aperture product/etc/sysconfig/preinstalled-packages-org.lineageos.aperture.xml product/etc/sysconfig/initial-package-stopped-states-org.lineageos.aperture.xml"}
 # nama overlay (glob, tanpa .apk) yang dianggap RRO khas device: milik donor dibuang, milik base (AOSP) disalin.
 # overlay yang nama/package-nya memuat codename donor selalu dibuang.
 DEVICE_OVERLAY_GLOBS=${DEVICE_OVERLAY_GLOBS:-"*ResCommon* *ResTarget*"}
