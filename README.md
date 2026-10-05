@@ -71,7 +71,7 @@ images/super.img.zst            super (system/system_ext/product donor + vendor/
 | `base_rom_url` | OTA ROM AOSP ingres (`.zip` payload.bin), atau fastboot MIUI/HyperOS ingres (`.tgz`), atau zip xiaomi.eu ingres |
 | `port_rom_url` | OTA ROM AOSP donor (`.zip` berisi `payload.bin`) |
 | `super_size` | `9126805504` (super ingres). Cek di HP: `su -c blockdev --getsize64 /dev/block/by-name/super` |
-| `ext4_partitions` | `vendor odm` (bisa diedit langsung di HP) |
+| `ext4_partitions` | `vendor odm system vendor_dlkm product system_ext` (bisa diedit langsung di HP). Kalau super tidak muat, partisi EXT4 terbesar otomatis jadi EROFS. `vendor_dlkm` dipakai apa adanya dari base (read-only) |
 | `debloat` | path/package tambahan, pisah spasi. Boleh kosong |
 | `copy_from_base` | path dari base yang ikut disalin, mis. `product/overlay/FooIngres.apk`. APK `sharedUserId=android.uid.system` dilewati (beda kunci platform) |
 | `boot_img_url` | default boot.img D2N (5.10.271-gki-MIX); kosongkan = kernel ROM base |

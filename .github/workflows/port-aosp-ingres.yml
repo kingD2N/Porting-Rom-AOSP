@@ -24,9 +24,9 @@ on:
         default: "9126805504"
         type: string
       ext4_partitions:
-        description: "Partisi yang dibangun EXT4 (sisanya EROFS)"
+        description: "Partisi yang dibangun EXT4 (sisanya EROFS). vendor_dlkm dipakai apa adanya dari base (tetap read-only)"
         required: false
-        default: "vendor odm"
+        default: "vendor odm system vendor_dlkm product system_ext"
         type: string
       debloat:
         description: "Debloat tambahan: package / folder / path, pisah spasi (mis. product/app/Foo)"

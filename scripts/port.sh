@@ -20,7 +20,7 @@ TOOLS_DIR=${TOOLS_DIR:?TOOLS_DIR wajib (root toolkit berisi bin/)}
 
 TARGET_DEVICE=${TARGET_DEVICE:-ingres}
 PORT_PARTITIONS=${PORT_PARTITIONS:-"system system_ext product"}
-EXT4_PARTITIONS=${EXT4_PARTITIONS:-"vendor odm"}
+EXT4_PARTITIONS=${EXT4_PARTITIONS:-"vendor odm system vendor_dlkm product system_ext"}
 DISABLE_ENCRYPTION=${DISABLE_ENCRYPTION:-true}
 RW_MOUNT=${RW_MOUNT:-true}
 DISABLE_AVB=${DISABLE_AVB:-true}
