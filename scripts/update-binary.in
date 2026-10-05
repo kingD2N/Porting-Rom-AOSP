@@ -1,0 +1,168 @@
+#!/sbin/sh
+# =============================================================================
+#  update-binary - port AOSP @PORT_NAME@ @PORT_VERSION@ untuk @TARGET_DEVICE@
+#  Flashable lewat custom recovery (OrangeFox / TWRP). Dibuat otomatis oleh port.sh
+# =============================================================================
+OUTFD=/proc/self/fd/$2
+ZIPFILE=$3
+
+TARGET="@TARGET_DEVICE@"
+PORT_NAME="@PORT_NAME@"
+PORT_VERSION="@PORT_VERSION@"
+ANTI_VER="@ANTI_VER@"
+SUPER_FORMAT="@SUPER_FORMAT@"
+SUPER_BYTES="@SUPER_BYTES@"
+FLASH_RECOVERY="@FLASH_RECOVERY@"
+AB_IMAGES="@AB_IMAGES@"
+NONAB_IMAGES="@NONAB_IMAGES@"
+TMPD=/tmp/aosp_port
+ERRF=$TMPD/err
+
+ui_print() {
+    echo "ui_print $1" >> "$OUTFD"
+    echo "ui_print" >> "$OUTFD"
+}
+progress() { echo "set_progress $1" >> "$OUTFD"; }
+abort() {
+    ui_print "! $1"
+    ui_print "! Flash dibatalkan."
+    exit 1
+}
+
+# tulis images/<nama> ke partisi; gagal unzip/tulis -> abort
+write_part() { # nama_file partisi
+    [ -e "$BLK/$2" ] || { ui_print "  - lewati $2 (partisi tidak ada)"; return 0; }
+    rm -f "$ERRF"
+    { unzip -p "$ZIPFILE" "images/$1" || echo "unzip" >> "$ERRF"; } | \
+        { dd of="$BLK/$2" bs=1048576 2>/dev/null || echo "dd" >> "$ERRF"; }
+    [ -f "$ERRF" ] && abort "gagal menulis $1 -> $2 ($(tr "\n" " " < "$ERRF"))"
+    return 0
+}
+
+write_super() {
+    rm -f "$ERRF"
+    if [ "$SUPER_FORMAT" = "zst" ]; then
+        { unzip -p "$ZIPFILE" images/super.img.zst || echo "unzip" >> "$ERRF"; } | \
+            { "$TMPD/zstd" -dc || echo "zstd" >> "$ERRF"; } | \
+            { dd of="$BLK/super" bs=4194304 2>/dev/null || echo "dd" >> "$ERRF"; }
+    else
+        { unzip -p "$ZIPFILE" images/super.img || echo "unzip" >> "$ERRF"; } | \
+            { dd of="$BLK/super" bs=4194304 2>/dev/null || echo "dd" >> "$ERRF"; }
+    fi
+    [ -f "$ERRF" ] && abort "gagal menulis super ($(tr "\n" " " < "$ERRF"))"
+    return 0
+}
+
+# ------------------------------------------------------------------ mulai
+mkdir -p "$TMPD"
+ui_print " "
+ui_print "=========================================="
+ui_print " $PORT_NAME $PORT_VERSION"
+ui_print " Port AOSP untuk $TARGET (recovery flashable)"
+ui_print "=========================================="
+ui_print " "
+
+BLK=/dev/block/bootdevice/by-name
+[ -d "$BLK" ] || BLK=/dev/block/by-name
+[ -d "$BLK" ] || abort "folder by-name tidak ditemukan"
+
+# ---- cek device
+dev_ok=0
+for prop in ro.product.device ro.product.vendor.device ro.build.product ro.product.name; do
+    val=$(getprop "$prop" 2>/dev/null)
+    case "$val" in
+        "$TARGET"|"$TARGET"_*|*_"$TARGET") dev_ok=1 ;;
+    esac
+done
+[ "$dev_ok" = 1 ] || abort "Device bukan $TARGET ($(getprop ro.product.device))"
+ui_print "- Device: $TARGET OK"
+
+# ---- ukuran super image harus sama persis dengan partisi super HP
+[ -e "$BLK/super" ] || abort "partisi super tidak ditemukan"
+real=$(blockdev --getsize64 "$BLK/super" 2>/dev/null)
+if [ -n "$real" ]; then
+    if [ "$real" != "$SUPER_BYTES" ]; then
+        ui_print "! Ukuran super HP  : $real byte"
+        ui_print "! Ukuran super ROM : $SUPER_BYTES byte"
+        abort "Ukuran beda. Build ulang dengan input super_size=$real"
+    fi
+    ui_print "- Ukuran super cocok ($real byte)"
+else
+    ui_print "! blockdev tidak tersedia, ukuran super tidak bisa dicek"
+fi
+
+# ---- cek isi zip
+unzip -l "$ZIPFILE" images/super.img images/super.img.zst 2>/dev/null | grep -q "images/super" \
+    || abort "images/super tidak ada di zip"
+
+if [ -n "$ANTI_VER" ]; then
+    ui_print "- Firmware anti-rollback ROM: $ANTI_VER"
+    ui_print "  (pastikan 'fastboot getvar anti' HP <= $ANTI_VER)"
+fi
+
+if [ "$SUPER_FORMAT" = "zst" ]; then
+    unzip -o "$ZIPFILE" META-INF/zstd -d "$TMPD" >/dev/null 2>&1
+    mv -f "$TMPD/META-INF/zstd" "$TMPD/zstd" 2>/dev/null
+    chmod 0755 "$TMPD/zstd"
+    [ -x "$TMPD/zstd" ] || abort "zstd tidak bisa diekstrak"
+fi
+
+# ---- lepas mount partisi logical
+for m in /system_root /system /system_ext /product /vendor /odm /mi_ext /vendor_dlkm /system_dlkm; do
+    umount "$m" >/dev/null 2>&1
+done
+
+progress 0.05
+# ---- firmware + boot (slot a dan b)
+ui_print "- Flash firmware & boot (slot A+B)"
+for p in $AB_IMAGES; do
+    if [ "$p" = "recovery" ] && [ "$FLASH_RECOVERY" != "true" ]; then
+        ui_print "  - recovery dilewati (custom recovery dipertahankan)"
+        continue
+    fi
+    ui_print "  - $p"
+    write_part "$p.img" "${p}_a"
+    write_part "$p.img" "${p}_b"
+done
+progress 0.30
+
+for p in $NONAB_IMAGES; do
+    ui_print "- Flash $p"
+    write_part "$p.img" "$p"
+done
+
+# ---- super
+ui_print "- Flash super (lama, jangan dicabut)..."
+write_super
+progress 0.95
+
+# ---- remap partisi logical supaya recovery melihat layout baru
+if command -v lptools >/dev/null 2>&1; then
+    for lp in system system_ext product vendor odm mi_ext vendor_dlkm system_dlkm odm_dlkm; do
+        if [ -e "/dev/block/mapper/${lp}_a" ]; then
+            lptools unmap "${lp}_a" >/dev/null 2>&1
+            lptools map "${lp}_a" >/dev/null 2>&1
+        fi
+    done
+fi
+
+# ---- slot aktif = A (partisi di super hanya diisi slot A)
+if command -v bootctl >/dev/null 2>&1; then
+    if bootctl set-active-boot-slot 0 >/dev/null 2>&1; then
+        ui_print "- Slot aktif: A"
+    else
+        ui_print "! Gagal set slot A, pilih Slot A manual di menu Reboot"
+    fi
+else
+    ui_print "! bootctl tidak ada, pilih Slot A manual di menu Reboot"
+fi
+
+progress 1.0
+rm -rf "$TMPD"
+ui_print " "
+ui_print "=========================================="
+ui_print " Selesai!"
+ui_print " WAJIB: Wipe > Format Data (ketik yes)"
+ui_print " lalu Reboot > System"
+ui_print "=========================================="
+exit 0

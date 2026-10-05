@@ -1,0 +1,336 @@
+name: Port AOSP -> ingres (Recovery)
+
+# Quick-port ROM AOSP (LineageOS / AxionOS / crDroid / dll) dari device donor ke POCO F4 GT (ingres).
+# Base (firmware, boot, vendor_boot, dtbo, vendor, odm, vendor_dlkm) = ROM ingres
+#      -> OTA AOSP ingres (payload.bin, mis. AxionOS ingres)  [disarankan]
+#      -> atau stock MIUI/HyperOS ingres (fastboot .tgz / OTA / zip xiaomi.eu)
+# Port (system, system_ext, product) = OTA ROM AOSP donor (zip berisi payload.bin)
+# Output: zip flashable recovery (OrangeFox/TWRP): META-INF/ + images/*.img + images/super.img.zst
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_rom_url:
+        description: "URL ROM base ingres: OTA AOSP ingres (.zip payload.bin) / fastboot MIUI-HyperOS (.tgz) / zip xiaomi.eu"
+        required: true
+        type: string
+      port_rom_url:
+        description: "URL OTA ROM AOSP donor (.zip berisi payload.bin). Ideal: device SM8450 (taro), basis sama dengan base"
+        required: true
+        type: string
+      super_size:
+        description: "Ukuran partisi super (byte). ingres = 9126805504. auto = baca dari ROM base"
+        required: false
+        default: "9126805504"
+        type: string
+      ext4_partitions:
+        description: "Partisi yang dibangun EXT4 (sisanya EROFS)"
+        required: false
+        default: "vendor odm"
+        type: string
+      debloat:
+        description: "Debloat tambahan: package / folder / path, pisah spasi (mis. product/app/Foo)"
+        required: false
+        default: ""
+        type: string
+      copy_from_base:
+        description: "Opsional: path dari ROM base yang ikut disalin, pisah spasi (mis. product/overlay/FooIngres.apk)"
+        required: false
+        default: ""
+        type: string
+      boot_img_url:
+        description: "Opsional: URL boot.img custom (kernel, mis. Templar/Melt). Kosong = boot.img ROM base"
+        required: false
+        default: ""
+        type: string
+      disable_encryption:
+        description: "Matikan fileencryption/metadata_encryption di fstab"
+        required: false
+        default: true
+        type: boolean
+      rw_mount:
+        description: "Mount partisi EXT4 sebagai rw"
+        required: false
+        default: true
+        type: boolean
+      debug_adb:
+        description: "ADB aktif sejak boot (untuk logcat saat bootloop)"
+        required: false
+        default: true
+        type: boolean
+      sepolicy_strict:
+        description: "Build GAGAL kalau sepolicy gabungan (system donor + vendor ingres) tidak bisa di-compile"
+        required: false
+        default: false
+        type: boolean
+      recovery_img_url:
+        description: "Opsional: URL recovery.img custom (OrangeFox). Kosong = recovery HP tidak disentuh"
+        required: false
+        default: ""
+        type: string
+      release_repo:
+        description: "owner/repo untuk GitHub Release (kosong = upload artifact)"
+        required: false
+        default: ""
+        type: string
+      gdrive_upload:
+        description: "Upload juga ke Google Drive (butuh secret RCLONE_CONFIG)"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: port-aosp-ingres-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # ---- default yang bisa diubah di sini ----
+  TARGET_DEVICE: ingres
+  PORT_PARTITIONS: "system system_ext product"
+  BASE_TYPE: auto              # auto | aosp | hyperos
+  DISABLE_AVB: "true"
+  EROFS_COMP: "lz4hc,9"        # kernel 5.10: hanya lz4/lz4hc
+  EXT4_HEADROOM_MB: "128"
+  VNDK_COMPAT: "true"          # vendor butuh VNDK APEX versi lama -> salin dari ROM base
+  LINKER_CHECK: "true"         # laporan dependensi linker ELF vendor/odm (info)
+  VINTF_COMPAT: "true"         # FCM level vendor tak dikenal donor -> salin compatibility_matrix.<lv>.xml dari system base
+  VINTF_TOOL_CHECK: "true"     # checkvintf --check-compat (info)
+  SEPOLICY_CHECK: "true"       # compile sepolicy gabungan pakai secilc (deteksi bootloop sepolicy sebelum flash)
+  PROP_MERGE: "true"           # salin props hardware (allowlist) dari product base
+  OVERLAY_FIX: "true"          # buang RRO khas device donor
+  REPLACE_FROM_BASE: "overlay displayconfig fcm"
+  DEVICE_OVERLAY_GLOBS: "*ResCommon* *ResTarget*"
+  FIRST_API_LEVEL: auto        # ingres rilis Android 12 -> 31
+  LCD_DENSITY: auto
+  INSTALLER: auto              # auto | base (META-INF zip base, mis. xiaomi.eu) | ours
+  RECOVERY_SUPER: zst          # hanya INSTALLER=ours: zst (zip kecil) | raw
+  GBOARD_APK: ""               # opsional: URL Gboard -> keyboard sistem
+  GBOARD_PACKAGE: com.google.android.inputmethod.latin
+  DEBLOAT_PRESET: none
+  FIT_FALLBACK_EROFS: "true"   # super tidak muat -> vendor/odm otomatis EROFS
+  ZIP_LEVEL: "6"
+  TOOLKIT_REPO: toraidl/hyperos_port
+  TOOLKIT_SHA: 523b0f6378e77e9e93ba6e15a064f45b26274eab
+  SPLIT_SIZE: 1900M
+  GDRIVE_REMOTE: "gdrive:ROM-Port/ingres"   # remote:folder rclone untuk gdrive_upload
+
+jobs:
+  port:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - name: Kosongkan disk runner
+        uses: jlumbroso/free-disk-space@v2
+        with:
+          preinstalled-runtimes: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: false
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install dependensi
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq aria2 zstd zip unzip e2fsprogs python3 default-jre-headless binutils >/dev/null
+          # secilc: cek compile sepolicy gabungan. Tidak fatal: port.sh hanya memberi warning kalau tidak ada.
+          sudo apt-get install -y -qq secilc >/dev/null || echo "::warning::secilc tidak tersedia, cek sepolicy dilewati"
+          sudo apt-get install -y -qq apksigner zipalign >/dev/null || true
+          aria2c --version | head -n1
+          command -v secilc && secilc --help 2>&1 | head -n1 || true
+
+      - name: Ambil toolkit (pinned)
+        run: |
+          set -euo pipefail
+          git init -q toolkit
+          cd toolkit
+          git remote add origin "https://github.com/${TOOLKIT_REPO}.git"
+          git sparse-checkout set --no-cone '/bin/Linux/x86_64/' '/bin/*.py' '/bin/imgextractor/' '/bin/flash/zstd' '/bin/apktool/'
+          git fetch -q --depth 1 --filter=blob:none origin "$TOOLKIT_SHA"
+          git checkout -q FETCH_HEAD
+          chmod +x bin/Linux/x86_64/*
+          echo "TOOLS_DIR=$PWD" >> "$GITHUB_ENV"
+
+      - name: Ambil extract.erofs terbaru (sekaiacg)
+        # ROM baru bisa pakai fitur EROFS yang belum dikenal extract.erofs lama di toolkit.
+        # Kalau step ini gagal, port.sh otomatis pakai extract.erofs toolkit.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo=sekaiacg/erofs-utils
+          asset=$(gh release view -R "$repo" --json assets -q '.assets[].name' \
+                  | grep -iE 'linux' | grep -iE 'x86_64|amd64' | head -n1)
+          [ -n "$asset" ] || { echo "asset Linux x86_64 tidak ditemukan"; exit 1; }
+          echo "asset: $asset"
+          mkdir -p erofs-new && cd erofs-new
+          gh release download -R "$repo" -p "$asset"
+          case "$asset" in
+            *.zip) unzip -q -o "$asset" ;;
+            *.tar.gz|*.tgz) tar -xzf "$asset" ;;
+            *.tar.xz) tar -xJf "$asset" ;;
+          esac
+          bin=$(find "$PWD" -type f -name extract.erofs | head -n1)
+          [ -n "$bin" ] || { echo "extract.erofs tidak ada di $asset"; exit 1; }
+          chmod +x "$bin"
+          rc=0; "$bin" -V > ver.txt 2>&1 || rc=$?
+          head -n 3 ver.txt
+          [ "$rc" -lt 126 ] || { echo "extract.erofs tidak bisa dijalankan (rc=$rc)"; exit 1; }
+          echo "EXTRACT_EROFS=$bin" >> "$GITHUB_ENV"
+
+      - name: Pilih lokasi kerja (disk paling lega)
+        run: |
+          set -euo pipefail
+          best="$GITHUB_WORKSPACE"; best_free=$(df --output=avail -B1 "$GITHUB_WORKSPACE" | tail -n1)
+          if [ -d /mnt ]; then
+            mnt_free=$(df --output=avail -B1 /mnt | tail -n1)
+            if [ "$mnt_free" -gt "$best_free" ]; then
+              sudo mkdir -p /mnt/port && sudo chown "$USER" /mnt/port
+              best=/mnt/port; best_free=$mnt_free
+            fi
+          fi
+          echo "WORK=$best/work" >> "$GITHUB_ENV"
+          echo "OUT=$GITHUB_WORKSPACE/out" >> "$GITHUB_ENV"
+          df -h "$GITHUB_WORKSPACE" /mnt 2>/dev/null || true
+          echo "Lokasi kerja: $best ($((best_free / 1073741824)) GB bebas)"
+
+      - name: Port ROM
+        id: port
+        env:
+          BASE_ROM: ${{ inputs.base_rom_url }}
+          PORT_ROM: ${{ inputs.port_rom_url }}
+          SUPER_SIZE: ${{ inputs.super_size }}
+          EXT4_PARTITIONS: ${{ inputs.ext4_partitions }}
+          DEBLOAT: ${{ inputs.debloat }}
+          COPY_FROM_BASE: ${{ inputs.copy_from_base }}
+          BOOT_IMG: ${{ inputs.boot_img_url }}
+          DISABLE_ENCRYPTION: ${{ inputs.disable_encryption }}
+          RW_MOUNT: ${{ inputs.rw_mount }}
+          DEBUG_ADB: ${{ inputs.debug_adb }}
+          SEPOLICY_STRICT: ${{ inputs.sepolicy_strict }}
+          RECOVERY_IMG: ${{ inputs.recovery_img_url }}
+        run: |
+          set -euo pipefail
+          sudo -E env "PATH=$PATH" bash scripts/port.sh
+          sudo chown -R "$USER" "$OUT"
+
+      - name: Upload log kerja (hanya kalau gagal)
+        if: ${{ failure() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: log-kerja-${{ github.run_number }}
+          path: ${{ env.WORK }}/*.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Upload ke Google Drive (rclone)
+        if: ${{ inputs.gdrive_upload }}
+        # gagal upload Drive tidak boleh menggagalkan upload artifact/release di bawah
+        continue-on-error: true
+        env:
+          RCLONE_CONFIG_DATA: ${{ secrets.RCLONE_CONFIG }}
+          ZIP: ${{ steps.port.outputs.zip }}
+        run: |
+          set -euo pipefail
+          [ -n "${RCLONE_CONFIG_DATA:-}" ] || { echo "::error::secret RCLONE_CONFIG (isi rclone.conf) belum diisi"; exit 1; }
+          curl -fsSL https://rclone.org/install.sh | sudo bash >/dev/null
+          mkdir -p ~/.config/rclone
+          printf '%s\n' "$RCLONE_CONFIG_DATA" > ~/.config/rclone/rclone.conf
+          rclone copy "$ZIP" "$GDRIVE_REMOTE" --stats 60s --stats-one-line --drive-chunk-size 128M
+          rclone copy "$ZIP.sha256" "$GDRIVE_REMOTE"
+          link=$(rclone link "$GDRIVE_REMOTE/$(basename "$ZIP")" 2>/dev/null || true)
+          echo "GDRIVE_LINK=${link:-}" >> "$GITHUB_ENV"
+          echo "Google Drive: $GDRIVE_REMOTE/$(basename "$ZIP") ${link:-}"
+
+      - name: Upload artifact (zip ROM langsung, tanpa dibungkus)
+        if: ${{ inputs.release_repo == '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          # archive: false -> file zip ROM di-upload apa adanya; nama artifact = nama file zip
+          path: ${{ steps.port.outputs.zip }}
+          archive: false
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Upload ke GitHub Release
+        if: ${{ inputs.release_repo != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          RELEASE_REPO: ${{ inputs.release_repo }}
+          ZIP: ${{ steps.port.outputs.zip }}
+          NAME: ${{ steps.port.outputs.name }}
+          PORT_VERSION: ${{ steps.port.outputs.port_version }}
+          ROM: ${{ steps.port.outputs.rom }}
+          DONOR: ${{ steps.port.outputs.donor }}
+        run: |
+          set -euo pipefail
+          [ -n "${GH_TOKEN:-}" ] || { echo "::error::secret RELEASE_TOKEN belum diisi"; exit 1; }
+          cd "$(dirname "$ZIP")"
+          file=$(basename "$ZIP")
+          assets=("$file.sha256")
+          if [ "$(stat -c%s "$file")" -gt 2000000000 ]; then
+            split -b "$SPLIT_SIZE" -d -a 2 "$file" "$file.part"
+            rm -f "$file"
+            for p in "$file".part*; do assets+=("$p"); done
+            join_note=$(printf 'File dipecah (limit 2 GB per asset). Gabungkan dulu:\n\n    Linux/macOS/Termux: cat %s.part* > %s\n    Windows:            copy /b %s.part00+%s.part01+... %s\n' "$file" "$file" "$file" "$file" "$file")
+          else
+            assets+=("$file")
+            join_note=""
+          fi
+          tag="${NAME}-r${GITHUB_RUN_NUMBER}"
+          {
+            echo "${ROM} ${PORT_VERSION} port untuk ${TARGET_DEVICE} (donor: ${DONOR})"
+            echo
+            echo "Flash lewat OrangeFox/TWRP: Install zip -> Format Data (ketik yes) -> Reboot System."
+            echo "Recovery HP tetap dipertahankan kecuali build memakai recovery_img_url."
+            echo
+            echo "$join_note"
+          } > notes.md
+          gh release create "$tag" "${assets[@]}" --repo "$RELEASE_REPO" \
+            --title "$NAME" --notes-file notes.md
+
+      - name: Ringkasan
+        if: always()
+        env:
+          DONOR: ${{ steps.port.outputs.donor }}
+          ROM: ${{ steps.port.outputs.rom }}
+          BTYPE: ${{ steps.port.outputs.base_type }}
+          PORT_VERSION: ${{ steps.port.outputs.port_version }}
+          NAME: ${{ steps.port.outputs.name }}
+          EXT4_PARTITIONS: ${{ inputs.ext4_partitions }}
+          DISABLE_ENCRYPTION: ${{ inputs.disable_encryption }}
+          RW_MOUNT: ${{ inputs.rw_mount }}
+          DEBUG_ADB: ${{ inputs.debug_adb }}
+          BOOT: ${{ inputs.boot_img_url }}
+        run: |
+          {
+            echo "## Port AOSP -> ${TARGET_DEVICE}"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| ROM | ${ROM:-?} ${PORT_VERSION:-} |"
+            echo "| Donor | ${DONOR:-?} |"
+            echo "| Base | ${BTYPE:-?} |"
+            echo "| Output | ${NAME:-gagal} |"
+            echo "| Kernel | ${BOOT:-boot.img base} |"
+            echo "| EXT4 | ${EXT4_PARTITIONS} |"
+            echo "| Encryption off | ${DISABLE_ENCRYPTION} |"
+            echo "| RW | ${RW_MOUNT} |"
+            echo "| Debug ADB | ${DEBUG_ADB} |"
+            echo "| Installer | ${INSTALLER} |"
+            if [ -n "${GDRIVE_LINK:-}" ]; then echo "| Google Drive | ${GDRIVE_LINK} |"; fi
+            if ls out/*.sha256 >/dev/null 2>&1; then
+              echo
+              echo "SHA256: \`$(cut -d' ' -f1 out/*.sha256 | head -n1)\`"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,35 @@
+# debloat_packages.txt - aplikasi yang dihapus dari ROM port (system, system_ext, product donor).
+# Boleh nama package (com.android.stk) atau nama folder APK (Stk), atau path (product/app/Foo).
+# Format bebas: satu per baris / dipisah koma. Teks setelah '|' atau '#' diabaikan.
+# Package yang tidak ada di ROM dilewati, build TIDAK dibatalkan.
+# Aplikasi penting (SystemUI, Settings, Launcher3/Trebuchet, GMS, WebView, IMS, LineageParts ...) dilindungi.
+# Awali dengan '!' untuk MEMPERTAHANKAN (tidak pernah dihapus, mengalahkan daftar di bawah).
+#
+# Default-nya hampir semua dikomentari: ROM AOSP biasanya sudah ramping. Buka '#' di baris
+# yang mau dihapus. Daftar "25 aplikasi terbesar" di log tahap 4/7 bisa jadi bahan.
+
+# ---- Updater donor (juga dibuang otomatis oleh port.sh, ini cuma jaga-jaga)
+org.lineageos.updater                          | Updater LineageOS (OTA device donor = brick)
+
+# ---- Android / AOSP (opsional)
+# com.android.bips                             | Default Printing Service
+# com.android.printspooler                     | Printing service
+# com.android.stk                              | SIM Tool-kit
+# com.android.emergency                        | Emergency info
+# com.android.traceur                          | System tracing
+# com.android.egg                              | Easter egg
+
+# ---- Google (ROM GApps, opsional)
+# com.google.android.apps.tachyon              | Google Meet
+# com.google.android.apps.wellbeing            | Digital Wellbeing
+# com.google.android.feedback                  | Feedback
+# com.google.android.marvin.talkback           | TalkBack
+# com.google.android.apps.subscriptions.red    | Google One
+
+# ---- Khas device DONOR (contoh: app pengaturan device donor, sering crash di ingres)
+#      Catatan: RRO overlay khas donor dibuang otomatis (codename donor / DEVICE_OVERLAY_GLOBS).
+# XiaomiParts                                  | DeviceParts donor (pakai punya ingres kalau satu kunci)
+# ParanoidSense                                | face unlock (butuh HAL/kalibrasi yang sama)
+
+# ---- Pertahankan (contoh)
+# !Aperture                                    | kamera AOSP
