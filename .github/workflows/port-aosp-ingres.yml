@@ -38,6 +38,11 @@ on:
         required: false
         default: ""
         type: string
+      base_extras:
+        description: "Salin fitur khas ingres dari ROM base LineageOS: GameKeys (tombol bahu) + Aperture (kamera)"
+        required: false
+        default: true
+        type: boolean
       boot_img_url:
         description: "URL boot.img custom (default: kernel D2N 5.10.271-gki-MIX). Kosongkan = boot.img ROM base"
         required: false
@@ -248,6 +253,7 @@ jobs:
           EXT4_PARTITIONS: ${{ inputs.ext4_partitions }}
           DEBLOAT: ${{ inputs.debloat }}
           COPY_FROM_BASE: ${{ inputs.copy_from_base }}
+          BASE_EXTRAS: ${{ inputs.base_extras }}
           BOOT_IMG: ${{ inputs.boot_img_url }}
           DISABLE_ENCRYPTION: ${{ inputs.disable_encryption }}
           RW_MOUNT: ${{ inputs.rw_mount }}

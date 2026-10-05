@@ -175,8 +175,26 @@ fcm_from_base() {
 
 # COPY_FROM_BASE: path bebas dari base (product/..., system_ext/..., system/...)
 copy_from_base() {
-    local items=() rel part sub src dst tmp apk info uid n=0
+    local items=() extras=() rel part sub src dst tmp apk info uid pkg n=0 donor_pkgs="" gamekeys=false
     read -r -a items <<< "$COPY_FROM_BASE"
+    if is_true "${BASE_EXTRAS:-false}"; then
+        read -r -a extras <<< "${BASE_EXTRA_PATHS:-}"
+        for rel in "${extras[@]}"; do
+            in_list "$rel" "${items[@]}" && continue
+            case $rel in product/*|system_ext/*) ;; *) continue ;; esac
+            [[ -e $B_FS/$rel ]] || continue
+            apk=$(find "$B_FS/$rel" -maxdepth 1 -name '*.apk' 2>/dev/null | head -n1 || true)
+            if [[ -n $apk ]]; then
+                pkg=$(python3 "$SCRIPT_DIR/apk_index.py" --apk "$apk" || true)
+                if [[ -z $donor_pkgs ]]; then donor_pkgs=$(python3 "$SCRIPT_DIR/apk_index.py" "$P_FS" | cut -f1 || true); fi
+                if [[ -n $pkg ]] && grep -qxF "$pkg" <<< "$donor_pkgs"; then
+                    log "fitur base: $pkg sudah ada di ROM donor, $rel tidak disalin"
+                    continue
+                fi
+            fi
+            items+=("$rel")
+        done
+    fi
     [[ ${#items[@]} -gt 0 ]] || return 0
     for rel in "${items[@]}"; do
         rel=${rel#/}; part=${rel%%/*}; sub=${rel#*/}
@@ -200,13 +218,53 @@ copy_from_base() {
                 warn "COPY_FROM_BASE: $rel (${info%%$'\t'*}) memakai sharedUserId=$uid -> wajib kunci platform ROM base, PackageManager ROM donor akan menolaknya. Dilewati"
                 continue
             fi
+            if [[ ${info%%$'\t'*} == org.lineageos.gamekeys ]]; then gamekeys=true; fi
         fi
         rm -rf "$dst"; mkdir -p "$(dirname "$dst")"; cp -a "$src" "$dst"
+        # oat/ (odex/vdex) dikompilasi terhadap framework ROM base -> basi di ROM donor. Dibuang kalau
+        # APK masih membawa classes.dex (ART compile ulang); kalau dex-nya di-strip, oat wajib dipakai
+        if [[ -n $apk && -d $dst/oat ]]; then
+            if python3 -c 'import sys,zipfile; sys.exit(0 if "classes.dex" in zipfile.ZipFile(sys.argv[1]).namelist() else 1)' "$apk"; then
+                rm -rf "$dst/oat"
+            else
+                warn "COPY_FROM_BASE: $rel tanpa classes.dex (dex di-strip), oat dari ROM base dipakai - app bisa gagal jalan di ROM donor"
+            fi
+        fi
         n=$((n + 1)); ok "COPY_FROM_BASE: $rel disalin"
         if [[ $rel == */priv-app/* && $part != system ]]; then base_privapp_perms "$rel"; fi
     done
     rm -rf "$WORK"/base_copy_*
     ok "COPY_FROM_BASE: $n path disalin"
+    if is_true "$gamekeys"; then gamekeys_sepolicy; fi
+}
+
+# GameKeys dari base ditandatangani kunci platform LineageOS; di ROM donor kuncinya beda, jadi
+# app berjalan sebagai priv_app (bukan platform_app). sepolicy Lineage hanya mengizinkan
+# platform_app/system_app memanggil HAL gamekeys & touchinjector -> priv_app ditambahkan sebagai
+# client lewat system_ext_sepolicy.cil donor (typeattributeset CIL digabung, bukan menimpa).
+gamekeys_sepolicy() {
+    local cil="$P_FS/system_ext/etc/selinux/system_ext_sepolicy.cil" all=() f hal added=""
+    for f in "$P_FS/system/system/etc/selinux/plat_sepolicy.cil" "$cil" "$P_FS/product/etc/selinux/product_sepolicy.cil"; do
+        if [[ -f $f ]]; then all+=("$f"); fi
+    done
+    if [[ ! -f $cil ]]; then
+        warn "GameKeys: system_ext_sepolicy.cil donor tidak ada, izin HAL tidak ditambahkan (tombol bahu tidak akan berfungsi)"
+        return 0
+    fi
+    for hal in gamekeys touchinjector; do
+        if grep -qF "(typeattribute hal_lineage_${hal}_client)" "${all[@]}"; then
+            if ! grep -qF "(typeattributeset hal_lineage_${hal}_client (priv_app))" "$cil"; then
+                if [[ -n $(tail -c1 "$cil") ]]; then echo >> "$cil"; fi
+                printf '(typeattributeset hal_lineage_%s_client (priv_app))\n' "$hal" >> "$cil"
+            fi
+            added+="$hal "
+        fi
+    done
+    if [[ $added == *gamekeys* ]]; then
+        ok "GameKeys: priv_app jadi client HAL ${added% } di sepolicy system_ext donor (tombol bahu)"
+    else
+        warn "GameKeys: sepolicy donor tidak mengenal HAL vendor.lineage.gamekeys, app tersalin tapi tombol bahu kemungkinan tidak berfungsi"
+    fi
 }
 
 # ------------------------------------------------------------------ updater
@@ -287,6 +345,63 @@ abi_check() {
     fi
 }
 
+# service ROM donor yang bisa me-reboot HP kalau crash (critical = 4x crash dalam 4 menit ->
+# reboot ke bootloader; reboot_on_failure = langsung reboot). Service AOSP standar dikenal;
+# sisanya (biasanya khas device donor, mis. marble) dilaporkan supaya bootloop mudah dilacak.
+RC_REBOOT_KNOWN="ueventd servicemanager hwservicemanager vndservicemanager keystore2 lmkd apexd apexd-bootstrap vold bpfloader logd netd statsd boringssl_self_test32 boringssl_self_test64 boringssl_self_test_apex32 boringssl_self_test_apex64"
+rc_reboot_check() {
+    local d out
+    local dirs=()
+    for d in "$P_FS/system/system/etc/init" "$P_FS/system_ext/etc/init" "$P_FS/product/etc/init"; do
+        if [[ -d $d ]]; then dirs+=("$d"); fi
+    done
+    [[ ${#dirs[@]} -gt 0 ]] || return 0
+    out=$(python3 - "$P_FS" "$RC_REBOOT_KNOWN" "${dirs[@]}" <<'PY'
+import os, sys
+root, known, dirs = sys.argv[1], set(sys.argv[2].split()), sys.argv[3:]
+svc = {}
+for d in dirs:
+    for dp, _dn, fns in os.walk(d):
+        for fn in sorted(fns):
+            if not fn.endswith(".rc"):
+                continue
+            f = os.path.join(dp, fn)
+            cur = None
+            for line in open(f, encoding="utf-8", errors="replace"):
+                p = line.split()
+                if not p or p[0].startswith("#"):
+                    continue
+                if p[0] in ("service", "on", "import"):
+                    cur = None
+                    if p[0] == "service" and len(p) >= 3:
+                        cur = p[1]
+                        svc.setdefault(cur, {"exe": p[2], "rc": os.path.relpath(f, root), "flags": set()})
+                    continue
+                if cur and p[0] in ("critical", "reboot_on_failure"):
+                    svc[cur]["flags"].add(p[0])
+for name, v in sorted(svc.items()):
+    if not v["flags"] or name in known:
+        continue
+    exe = v["exe"]
+    loc = None
+    for pre, sub in (("/system_ext/", "system_ext/"), ("/product/", "product/"), ("/system/", "system/system/")):
+        if exe.startswith(pre):
+            loc = os.path.join(root, sub + exe[len(pre):])
+            break
+    state = "ada" if loc and os.path.exists(loc) else ("TIDAK ADA" if loc else "di partisi lain")
+    print("%s\t%s\t%s\t%s\t%s" % (name, ",".join(sorted(v["flags"])), exe, state, v["rc"]))
+PY
+)
+    if [[ -z $out ]]; then
+        ok "rc donor: tidak ada service non-standar yang bisa memicu reboot (critical/reboot_on_failure)"
+        return 0
+    fi
+    warn "rc donor: service non-standar yang bisa memicu reboot kalau crash di ingres (cek ini dulu kalau bootloop setelah logo):"
+    while IFS=$'\t' read -r name flags exe state rc; do
+        printf '    %-28s %-26s %s (%s) [%s]\n' "$name" "$flags" "$exe" "$state" "$rc" >&2
+    done <<< "$out"
+}
+
 ims_check() {
     local idx
     idx=$(python3 "$SCRIPT_DIR/apk_index.py" "$P_FS" | cut -f1 || true)
@@ -356,6 +471,16 @@ sepolicy_compile_check() {
         if [[ -f $d/mapping/$ver.compat.cil ]]; then args+=("$d/mapping/$ver.compat.cil"); fi
     done
     if [[ -f $vs/plat_pub_versioned.cil ]]; then args+=("$vs/plat_pub_versioned.cil"); fi
+    # Android 16: init ikut memuat label genfs system sesuai versi yang diminta vendor
+    local gv
+    gv=$(tr -d '[:space:]' < "$vs/genfs_labels_version.txt" 2>/dev/null || true)
+    if [[ -n $gv ]]; then
+        if [[ -f $sys/plat_sepolicy_genfs_$gv.cil ]]; then
+            args+=("$sys/plat_sepolicy_genfs_$gv.cil")
+        else
+            warn "sepolicy: vendor minta label genfs versi $gv, system donor tidak punya plat_sepolicy_genfs_$gv.cil (label sysfs bisa salah -> avc denied)"
+        fi
+    fi
     args+=("$vs/vendor_sepolicy.cil")
     if [[ -f $B_FS/odm/etc/selinux/odm_sepolicy.cil ]]; then args+=("$B_FS/odm/etc/selinux/odm_sepolicy.cil"); fi
     log "sepolicy: secilc ${#args[@]} argumen, vendor plat version $ver"

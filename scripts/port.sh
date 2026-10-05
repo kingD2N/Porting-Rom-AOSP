@@ -36,6 +36,12 @@ REPLACE_FROM_BASE=${REPLACE_FROM_BASE:-"overlay displayconfig fcm"}
 # mis. "product/overlay/FooIngres.apk system_ext/priv-app/XiaomiDolby". APK sharedUserId=system
 # TIDAK bisa dipindah ke ROM lain (beda kunci platform) -> dilewati dengan warning.
 COPY_FROM_BASE=${COPY_FROM_BASE:-""}
+# fitur khas ingres di ROM base LineageOS yang ikut hilang karena system_ext/product diganti donor.
+# Disalin otomatis kalau ADA di base dan package-nya BELUM ada di donor (path yang tidak ada dilewati diam-diam):
+#   GameKeys = tombol bahu (shoulder trigger) POCO F4 GT -> HAL vendor.lineage.gamekeys + touchinjector
+#   Aperture = aplikasi kamera LineageOS (Camera2 standar, cocok dengan vendor kamera base)
+BASE_EXTRAS=${BASE_EXTRAS:-true}
+BASE_EXTRA_PATHS=${BASE_EXTRA_PATHS:-"system_ext/priv-app/GameKeys product/app/Aperture product/etc/sysconfig/preinstalled-packages-org.lineageos.aperture.xml product/etc/sysconfig/initial-package-stopped-states-org.lineageos.aperture.xml"}
 # nama overlay (glob, tanpa .apk) yang dianggap RRO khas device: milik donor dibuang, milik base (AOSP) disalin.
 # overlay yang nama/package-nya memuat codename donor selalu dibuang.
 DEVICE_OVERLAY_GLOBS=${DEVICE_OVERLAY_GLOBS:-"*ResCommon* *ResTarget*"}
@@ -853,33 +859,55 @@ base_privapp_perms() { # <rel dir app di base, mis. product/priv-app/MiuiCamera>
     pkg=$(python3 "$SCRIPT_DIR/apk_index.py" --apk "$apk" || true)
     if [[ -z $pkg ]]; then warn "privapp: package $(basename "$apk") tidak terbaca, allowlist tidak disalin"; return 0; fi
     out="$P_FS/$part/etc/permissions/privapp-permissions-${TARGET_DEVICE}-base-${pkg//./_}.xml"
-    n=$(python3 - "$pkg" "$out" "$B_FS/$part/etc/permissions" <<'PY'
+    # izin yang diminta APK: di base app ini mungkin bertanda tangan platform (izin signature|privileged
+    # tidak perlu allowlist), di ROM donor kuncinya beda -> izin itu jatuh ke jalur "privileged" dan
+    # wajib ada di allowlist. Semua uses-permission ikut dimasukkan (izin non-privileged diabaikan
+    # PackageManager, jadi aman).
+    python3 "$SCRIPT_DIR/apk_index.py" --perms "$apk" > "$WORK/privapp_req.txt" 2>/dev/null || true
+    n=$(python3 - "$pkg" "$out" "$B_FS/$part/etc/permissions" "$WORK/privapp_req.txt" <<'PY'
 import glob, os, re, sys
-pkg, out, d = sys.argv[1], sys.argv[2], sys.argv[3]
-blocks = []
-pat = re.compile(r'<privapp-permissions\s+package="%s"\s*>.*?</privapp-permissions>' % re.escape(pkg), re.S)
+pkg, out, d, req = sys.argv[1:5]
+pat = re.compile(r'<privapp-permissions\s+package="%s"\s*>(.*?)</privapp-permissions>' % re.escape(pkg), re.S)
+allow, deny = [], []
 for f in sorted(glob.glob(os.path.join(d, "*.xml"))):
     try:
         s = open(f, encoding="utf-8", errors="replace").read()
     except OSError:
         continue
     s = re.sub(r'<!--.*?-->', '', s, flags=re.S)
-    blocks += pat.findall(s)
-if blocks:
+    for body in pat.findall(s):
+        for kind, name in re.findall(r'<(permission|deny-permission)\s+name="([^"]+)"', body):
+            (allow if kind == "permission" else deny).append(name)
+from_base = len(set(allow))
+try:
+    wanted = [l.strip() for l in open(req, encoding="utf-8") if l.strip()]
+except OSError:
+    wanted = []
+for name in wanted:
+    if name.startswith(pkg + ".") or name in deny:
+        continue
+    allow.append(name)
+allow = sorted(set(allow))
+deny = sorted(set(deny) - set(allow))
+if allow or deny:
     os.makedirs(os.path.dirname(out), exist_ok=True)
     with open(out, "w", encoding="utf-8") as f:
-        f.write('<?xml version="1.0" encoding="utf-8"?>\n<!-- allowlist dari ROM base (port.sh) -->\n<permissions>\n')
-        for b in blocks:
-            f.write("    " + b.strip() + "\n")
-        f.write("</permissions>\n")
+        f.write('<?xml version="1.0" encoding="utf-8"?>\n<!-- allowlist dari ROM base + izin yang diminta APK (port.sh) -->\n<permissions>\n')
+        f.write('    <privapp-permissions package="%s">\n' % pkg)
+        for name in allow:
+            f.write('        <permission name="%s"/>\n' % name)
+        for name in deny:
+            f.write('        <deny-permission name="%s"/>\n' % name)
+        f.write('    </privapp-permissions>\n</permissions>\n')
     os.chmod(out, 0o644)
-print(sum(len(re.findall(r'<(permission|deny-permission)\s', b)) for b in blocks))
+print("%d %d" % (len(allow) + len(deny), from_base))
 PY
 )
-    if [[ ${n:-0} -gt 0 ]]; then
-        ok "privapp: $n izin $pkg dari allowlist base -> ${out#"$P_FS"/}"
+    rm -f "$WORK/privapp_req.txt"
+    if [[ ${n%% *} -gt 0 ]]; then
+        ok "privapp: ${n%% *} izin $pkg (${n##* } dari allowlist base, sisanya dari manifest APK) -> ${out#"$P_FS"/}"
     else
-        warn "privapp: allowlist $pkg tidak ditemukan di base $part/etc/permissions. Kalau bootloop dengan 'privapp-permissions allowlist' di logcat, ini penyebabnya"
+        warn "privapp: $pkg tidak punya izin yang bisa di-allowlist (allowlist base & manifest kosong)"
     fi
 }
 
@@ -1702,6 +1730,7 @@ main() {
     if is_true "$LINKER_CHECK"; then linker_check; fi
     abi_check
     ims_check
+    rc_reboot_check
 
     DEBLOAT_KEEP=$(debloat_keep)
     if is_true "$PROP_MERGE"; then merge_device_props; fi

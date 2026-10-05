@@ -6,6 +6,8 @@ tanpa aapt. Dipakai untuk debloat berdasarkan nama package.
   apk_index.py <root>          -> "<package>\t<folder app relatif ke root>" per APK
   apk_index.py --apk <file>    -> nama package satu APK
   apk_index.py --info <file>   -> "<package>\t<sharedUserId atau ->" satu APK
+  apk_index.py --perms <file>  -> nama <uses-permission> satu APK, satu per baris
+  apk_index.py --libs <file>   -> "<nama>\t<required true/false>" untuk tiap <uses-library>
 """
 import os
 import struct
@@ -75,6 +77,52 @@ def manifest_attrs(data):
     return {}
 
 
+def manifest_elements(data):
+    """daftar (nama elemen, {atribut: nilai}) semua elemen AXML; nilai string atau bool/int"""
+    out = []
+    if len(data) < 8:
+        return out
+    _t, hsize, _size = struct.unpack_from("<HHI", data, 0)
+    pos = hsize
+    strings = []
+    while pos + 8 <= len(data):
+        ctype, _chsize, csize = struct.unpack_from("<HHI", data, pos)
+        if csize < 8:
+            break
+        if ctype == RES_STRING_POOL:
+            strings = _strings(data, pos)
+        elif ctype == RES_XML_START_ELEMENT:
+            name_idx = struct.unpack_from("<I", data, pos + 20)[0]
+            a_start, a_size, a_count = struct.unpack_from("<HHH", data, pos + 24)
+            ap = pos + 16 + a_start
+            attrs = {}
+            for i in range(a_count):
+                o = ap + i * a_size
+                _ns, an, raw = struct.unpack_from("<III", data, o)
+                dtype = data[o + 15]
+                val = struct.unpack_from("<I", data, o + 16)[0]
+                if an >= len(strings):
+                    continue
+                if raw < len(strings):
+                    attrs[strings[an]] = strings[raw]
+                elif dtype == 0x12:          # TYPE_INT_BOOLEAN
+                    attrs[strings[an]] = val != 0
+                else:
+                    attrs[strings[an]] = val
+            if name_idx < len(strings):
+                out.append((strings[name_idx], attrs))
+        pos += csize
+    return out
+
+
+def apk_elements(path):
+    try:
+        with zipfile.ZipFile(path) as z:
+            return manifest_elements(z.read("AndroidManifest.xml"))
+    except Exception:
+        return []
+
+
 def apk_package(path):
     try:
         with zipfile.ZipFile(path) as z:
@@ -95,6 +143,19 @@ def main():
     if len(sys.argv) == 3 and sys.argv[1] == "--info":
         a = apk_info(sys.argv[2])
         print("%s\t%s" % (a.get("package", ""), a.get("sharedUserId") or "-"))
+        return
+    if len(sys.argv) == 3 and sys.argv[1] in ("--perms", "--libs"):
+        seen = set()
+        for el, at in apk_elements(sys.argv[2]):
+            nm = at.get("name")
+            if not isinstance(nm, str) or nm in seen:
+                continue
+            if sys.argv[1] == "--perms" and el in ("uses-permission", "uses-permission-sdk-23"):
+                seen.add(nm)
+                print(nm)
+            elif sys.argv[1] == "--libs" and el in ("uses-library", "uses-native-library"):
+                seen.add(nm)
+                print("%s\t%s" % (nm, "false" if at.get("required") is False else "true"))
         return
     if len(sys.argv) == 3 and sys.argv[1] == "--apk":
         print(apk_package(sys.argv[2]) or "")
