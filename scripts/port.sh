@@ -127,38 +127,76 @@ need() { local t; for t in "$@"; do command -v "$t" >/dev/null || die "tool tida
 source "$SCRIPT_DIR/aosp_extras.sh"
 
 # ------------------------------------------------------------------ fetch
-fetch() { # src dest_dir name -> echo path
-    local src=$1 dir=$2 name=$3
-    if [[ $src =~ ^https?:// ]]; then
-        mkdir -p "$dir"
-        log "download $name: $src" >&2
-        if command -v aria2c >/dev/null; then
-            aria2c -x16 -s16 -k1M --file-allocation=none --console-log-level=warn \
-                   --summary-interval=60 -d "$dir" -o "$name" "$src" >&2
-        else
-            curl -fL --retry 3 -o "$dir/$name" "$src" >&2
-        fi
-        echo "$dir/$name"
+# link "halaman web" (Google Drive /view, SourceForge, Pixeldrain /u/, MediaFire) diubah ke link
+# unduh langsung lewat dl_helper.py. Hasil download yang ternyata HTML ditolak dengan alasan jelas.
+dl_tool() { python3 "$SCRIPT_DIR/dl_helper.py" "$@"; }
+
+dl_raw() { # url out (aria2c multi-koneksi; Google Drive & MediaFire pakai curl, server menolak multi-koneksi)
+    local url=$1 out=$2 h
+    h=$(dl_tool host "$url")
+    rm -f "$out"
+    if command -v aria2c >/dev/null && [[ $h != gdrive && $h != mediafire ]]; then
+        aria2c -x16 -s16 -k1M --file-allocation=none --console-log-level=warn --allow-overwrite=true \
+               --summary-interval=60 -d "$(dirname "$out")" -o "$(basename "$out")" "$url" >&2
     else
-        [[ -f $src ]] || die "file tidak ditemukan: $src"
-        readlink -f "$src"
+        curl -fsSL --retry 3 --retry-delay 5 -c "$WORK/cookies.txt" -b "$WORK/cookies.txt" \
+             -o "$out" "$url" >&2
     fi
 }
 
-check_url() { # label url
-    local label=$1 url=$2 code name
-    [[ $url =~ ^https?:// ]] || return 0
-    name=${url%%\?*}; name=${name##*/}
-    case $name in
-        *.zip|*.tgz|*.tar.gz|*.tar|*.tar.zst|*.tar.xz|*.bin|*.img|*.apk) ;;
-        *) warn "$label: nama file '$name' tidak berakhiran .zip/.tgz/.img/.apk - URL kemungkinan terpotong" ;;
-    esac
-    code=$(curl -sL -r 0-0 -o /dev/null -w '%{http_code}' --retry 2 --max-time 60 "$url" || echo 000)
+fetch() { # src dest_dir name -> echo path
+    local src=$1 dir=$2 name=$3 url h out kind next try
+    if [[ ! $src =~ ^https?:// ]]; then
+        [[ -f $src ]] || die "file tidak ditemukan: $src"
+        readlink -f "$src"; return 0
+    fi
+    mkdir -p "$dir"; out="$dir/$name"
+    url=$(dl_tool normalize "$src"); h=$(dl_tool host "$src")
+    log "download $name: $src" >&2
+    if [[ $url != "$src" ]]; then log "  link $h -> unduh langsung: $url" >&2; fi
+    for try in 1 2 3; do
+        dl_raw "$url" "$out" || die "download $name gagal: $url"
+        kind=$(dl_tool sniff "$out")
+        [[ $kind == html ]] || break
+        next=""
+        case $h in
+            gdrive)    next=$(dl_tool gdrive-form "$out" || true) ;;   # halaman konfirmasi file besar
+            mediafire) next=$(dl_tool mediafire "$out" || true) ;;
+        esac
+        if [[ -z $next || $try -eq 3 ]]; then
+            die "download $name menghasilkan halaman HTML, bukan file: $(dl_tool html-reason "$out"). URL: $src"
+        fi
+        log "  $h: halaman konfirmasi, lanjut ke $next" >&2
+        url=$next
+    done
+    log "  $name: $(( $(stat -c%s "$out") / 1048576 )) MB, format $kind" >&2
+    echo "$out"
+}
+
+check_url() { # label url  (cek cepat: bisa diakses + bukan halaman HTML, sebelum download besar)
+    local label=$1 src=$2 url h code tmp kind name
+    [[ $src =~ ^https?:// ]] || return 0
+    url=$(dl_tool normalize "$src"); h=$(dl_tool host "$src")
+    name=${src%%\?*}; name=${name##*/}
+    tmp="$WORK/check_$label.bin"
+    code=$(curl -sL -r 0-511 -o "$tmp" -w '%{http_code}' --retry 2 --max-time 90 "$url" || echo 000)
     case $code in
-        200|206) ok "$label: URL bisa diakses ($name)" ;;
-        404) die "$label: file tidak ditemukan (HTTP 404). Cek URL lengkap sampai .zip: $url" ;;
-        *)   die "$label: URL tidak bisa diakses (HTTP $code): $url" ;;
+        200|206) ;;
+        404) die "$label: file tidak ditemukan (HTTP 404): $src" ;;
+        403) die "$label: akses ditolak (HTTP 403). Link private / kedaluwarsa? $src" ;;
+        *)   die "$label: URL tidak bisa diakses (HTTP $code): $src" ;;
     esac
+    kind=$(dl_tool sniff "$tmp")
+    if [[ $kind == html ]]; then
+        if [[ $h == gdrive || $h == mediafire ]]; then
+            ok "$label: URL bisa diakses ($h, halaman konfirmasi akan dilewati saat download)"
+        else
+            die "$label: URL membalas halaman HTML, bukan file ($(dl_tool html-reason "$tmp")). Pakai link unduh langsung: $src"
+        fi
+    else
+        ok "$label: URL bisa diakses (${name:-file}, format $kind)"
+    fi
+    rm -f "$tmp"
 }
 
 # ------------------------------------------------------------------ unpack ROM

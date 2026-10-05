@@ -80,6 +80,8 @@ images/super.img.zst            super (system/system_ext/product donor + vendor/
 | `release_repo` | kosong = Artifacts. `owner/repo` = GitHub Release (secret `RELEASE_TOKEN`) |
 | `gdrive_upload` | `true` = upload juga ke Google Drive lewat rclone (secret `RCLONE_CONFIG` = isi `rclone.conf`, folder di env `GDRIVE_REMOTE`) |
 
+Link ROM yang didukung: link unduh langsung (GitHub release, server sendiri), **Google Drive** (link `.../file/d/<id>/view` boleh langsung ditempel; file harus *Anyone with the link*), **SourceForge** (link `downloads.sourceforge.net/...?ts=...` yang kedaluwarsa otomatis diubah ke link `/download` yang stabil), **Pixeldrain** (`/u/<id>`), dan **MediaFire**. Sebelum download besar, isi URL dicek: kalau server membalas halaman HTML (link salah, private, kuota Drive habis), build langsung berhenti dengan alasannya.
+
 4. Ambil zip dari **Artifacts** (atau Release / Google Drive).
 
 Kalau gagal, buka step **Port ROM**. Tiap tahap punya header (0/7 sampai 7/7); baris `[warn]`/`[fail]` biasanya langsung menunjuk masalahnya. **Baca hasil cek sepolicy, checkvintf, linker, ABI, IMS sebelum flash.**
@@ -155,6 +157,7 @@ scripts/linker_check.py                  cek library yang dibutuhkan vendor
 scripts/installer_sanitize.py            pastikan installer tidak wipe data
 scripts/sparse_split.py                  pecah super (mode installer base)
 scripts/apk_index.py                     baca package & sharedUserId APK
+scripts/dl_helper.py                     link Google Drive/SourceForge/Pixeldrain/MediaFire -> unduh langsung, tolak HTML
 scripts/build_rro.sh                     build RRO dari rro/ -> devices/ingres/product/overlay/
 rro/                                     sumber RRO ingres (res/ + manifest, dari device tree)
 scripts/update-binary.in                 installer recovery
