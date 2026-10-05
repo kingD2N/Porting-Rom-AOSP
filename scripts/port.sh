@@ -616,6 +616,9 @@ vintf_device_check() {
     for d in "$P_FS/system/system" "$P_FS/system_ext" "$P_FS/product"; do
         if [[ -d $d ]]; then args+=(--framework "$d"); fi
     done
+    # device manifest vendor/odm (termasuk manifest_<sku>.xml & manifest/*.xml) untuk cek versi sepolicy
+    while IFS= read -r -d '' f; do args+=(--device-manifest "$f"); done \
+        < <(find "$B_FS/vendor/etc/vintf" "$B_FS/odm/etc/vintf" -maxdepth 2 -type f -name 'manifest*.xml' -print0 2>/dev/null || true)
     python3 "$SCRIPT_DIR/vintf_check.py" "${args[@]}" > "$WORK/vintf_device.log" 2>&1 || true
     while IFS= read -r d; do printf '    %s\n' "$d"; done < "$WORK/vintf_device.log"
     # HAL framework yang diminta vendor tapi tidak ada di donor (mis. sigma_miracast Qualcomm WFD):
