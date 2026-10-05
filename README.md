@@ -30,6 +30,8 @@ Lalu `scripts/port.sh` mem-patch bagian yang biasanya bikin port gagal boot:
   - **checkvintf** `--check-compat` framework donor vs vendor ingres.
   - **ABI**: vendor ingres masih 32+64-bit; donor 64-bit-only (tanpa `/system/lib`) ditandai.
   - **IMS**: donor tanpa IMS Qualcomm (`org.codeaurora.ims`) ditandai (VoLTE/VoWiFi mati).
+- **vendor_boot v4 berfragmen:** first-stage fstab dipatch per fragmen (platform/dlkm/recovery) oleh `scripts/vendor_boot_fstab.py`, tabel fragmen & ukuran ikut diperbarui. (magiskboot toolkit menggabung semua fragmen jadi satu dan tidak memperbarui tabel -> modul dlkm rusak -> bootloop; LineageOS/AxionOS sm8450 memakai fragmen `dlkm`.)
+- **Cek ekstrak per path:** setiap entri `fs_config` dicek ada di disk; entri sintetis `lost+found` dari imgextractor (ext4) diabaikan, jadi partisi kecil seperti `odm` ext4 tidak gagal palsu.
 - **Flash aman:** partisi kalibrasi/data (`persist`, `modemst1/2`, `fsg`, `frp`, ...) tidak pernah di-flash. Base fastboot Xiaomi: hanya image yang memang di-flash `flash_all.sh`.
 - **fstab & vbmeta:** enkripsi `/data` dimatikan (opsional), vendor/odm bisa rw, verity off. Partisi port selalu EROFS, jadi kalau fstab base cuma punya baris `ext4` untuk system/system_ext/product (umum di build AOSP), baris `erofs` ditambahkan otomatis. Sama untuk vendor/odm, karena bisa diturunkan ke EROFS kalau super tidak muat.
 - **Pengaman base:** kalau `ro.product.vendor.device` base bukan `ingres`, build dihentikan. Firmware base ikut di-flash, jadi salah base = brick.
@@ -157,6 +159,8 @@ scripts/linker_check.py                  cek library yang dibutuhkan vendor
 scripts/installer_sanitize.py            pastikan installer tidak wipe data
 scripts/sparse_split.py                  pecah super (mode installer base)
 scripts/apk_index.py                     baca package & sharedUserId APK
+scripts/vendor_boot_fstab.py             patch fstab first-stage di vendor_boot v3/v4 (per fragmen)
+scripts/fsconfig_check.py                cek hasil ekstrak per path + bersihkan fs_config
 scripts/dl_helper.py                     link Google Drive/SourceForge/Pixeldrain/MediaFire -> unduh langsung, tolak HTML
 scripts/build_rro.sh                     build RRO dari rro/ -> devices/ingres/product/overlay/
 rro/                                     sumber RRO ingres (res/ + manifest, dari device tree)

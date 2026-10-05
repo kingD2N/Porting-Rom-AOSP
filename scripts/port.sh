@@ -199,7 +199,12 @@ check_url() { # label url  (cek cepat: bisa diakses + bukan halaman HTML, sebelu
     url=$(dl_tool normalize "$src"); h=$(dl_tool host "$src")
     name=${src%%\?*}; name=${name##*/}
     tmp="$WORK/check_$label.bin"
-    code=$(curl -sL -r 0-511 -o "$tmp" -w '%{http_code}' --retry 2 --max-time 90 -A "${DL_UA:-Wget/1.21.4}" "$url" || echo 000)
+    # cuma 512 byte pertama: head menutup pipe, jadi server yang mengabaikan Range tidak
+    # membuat file ROM penuh ikut terunduh di sini. Kode HTTP dibaca dari header (redirect terakhir).
+    curl -sL -r 0-511 --retry 2 --connect-timeout 30 --max-time 120 -A "${DL_UA:-Wget/1.21.4}" \
+         -D "$tmp.hdr" "$url" 2>/dev/null | head -c 512 > "$tmp" || true
+    code=$(grep -E '^HTTP/' "$tmp.hdr" 2>/dev/null | tail -n1 | awk '{print $2}' || true)
+    code=${code:-000}; rm -f "$tmp.hdr"
     case $code in
         200|206) ;;
         404) die "$label: file tidak ditemukan (HTTP 404): $src" ;;
@@ -385,21 +390,28 @@ sanity_file() { # partisi -> file yang wajib ada setelah ekstrak
 }
 
 verify_extract() { # root name -> 0 kalau lengkap
-    local root=$1 name=$2 cfg exp got key
+    local root=$1 name=$2 cfg got key res
     cfg="$root/config/${name}_fs_config"
     [[ -d $root/$name && -s $cfg ]] || { warn "$name: folder/config hasil ekstrak tidak ada"; return 1; }
-    exp=$(wc -l < "$cfg")
     got=$(find "$root/$name" | wc -l)
-    log "  $name: $got file/folder, fs_config $exp entri"
     key=$(sanity_file "$name")
     if [[ -n $key && ! -e $root/$name/$key ]]; then
         warn "$name: $key tidak ada setelah ekstrak"; return 1
     fi
-    # fs_config punya entri sintetis ("/", lost+found) -> toleransi 2 + 3%
-    if [[ $(( exp - got )) -gt $(( 2 + exp * 3 / 100 )) ]]; then
-        warn "$name: ekstrak tidak lengkap ($got dari $exp)"; return 1
+    # dicek per PATH: setiap entri asli fs_config harus ada di disk. Entri sintetis ("/",
+    # lost+found, slot "odm/lost+found/" dari imgextractor) diabaikan.
+    if res=$(python3 "$SCRIPT_DIR/fsconfig_check.py" check "$root" "$name"); then
+        log "  $name: $got file/folder, $(head -n1 <<< "$res")"
+        if grep -q 'HILANG' <<< "$res"; then
+            warn "$name: beberapa entri fs_config tidak terbentuk (dalam toleransi):"
+            grep 'HILANG' <<< "$res" | while IFS= read -r key; do printf '    %s\n' "$key" >&2; done
+        fi
+        return 0
     fi
-    return 0
+    log "  $name: $got file/folder"
+    warn "$name: ekstrak tidak lengkap"
+    while IFS= read -r key; do printf '    %s\n' "$key" >&2; done <<< "$res"
+    return 1
 }
 
 extract_img() { # img out_root
@@ -426,6 +438,9 @@ extract_img() { # img out_root
             done ;;
         ext)
             python3 "$PYBIN/imgextractor/imgextractor.py" "$img" "$root" > "$lg" 2>&1 || true
+            if [[ -s $root/config/${name}_fs_config ]]; then
+                python3 "$SCRIPT_DIR/fsconfig_check.py" sanitize "$root" "$name" >> "$lg" 2>&1 || true
+            fi
             if verify_extract "$root" "$name"; then ok=1; else tail -n 15 "$lg" >&2; fi ;;
         *)  die "tipe fs tidak dikenal untuk $name.img: '$t'" ;;
     esac
@@ -1122,48 +1137,27 @@ patch_vendor_fstab() {
 }
 
 patch_vendor_boot() {
-    local img="$B_IMG/vendor_boot.img" t="$WORK/vendor_boot" c ent fmt cp patched=0
+    # first-stage fstab (dipakai init untuk mount system/vendor/odm) ada di vendor ramdisk.
+    # vendor_boot v4 LineageOS/AxionOS punya beberapa fragmen (platform + dlkm): dipatch per
+    # fragmen oleh vendor_boot_fstab.py, tabel fragmen ikut diperbarui (magiskboot toolkit
+    # merusak tabel ini -> modul dlkm hilang -> bootloop).
+    local img="$B_IMG/vendor_boot.img" lg="$WORK/vendor_boot_fstab.log" rc=0
     [[ -f $img ]] || { warn "vendor_boot.img tidak ada, first-stage fstab tidak dipatch"; return 0; }
-    rm -rf "$t"; mkdir -p "$t"
-    (
-        cd "$t"
-        magiskboot unpack -h "$img" >/dev/null 2>&1 || exit 3
-        shopt -s nullglob
-        # recovery di dalam vendor_boot (BOARD_INCLUDE_RECOVERY_RAMDISK_IN_VENDOR_BOOT) -> flash vendor_boot ganti recovery
-        for c in vendor_ramdisk/*recovery*; do echo "$c" > "$WORK/vendor_boot_recovery"; done
-        for c in ramdisk.cpio vendor_ramdisk/*.cpio; do
-            [[ -f $c ]] || continue
-            # ramdisk bisa masih terkompres (lz4_legacy/gzip) walau magiskboot bilang raw
-            fmt=$(magiskboot decompress "$c" "$c.dec" 2>&1 | sed -n 's/^Detected format: \[\(.*\)\]$/\1/p' | head -n1 || true)
-            if [[ -s $c.dec ]]; then cp="$c.dec"; else cp="$c"; fmt=raw; rm -f "$c.dec"; fi
-            rm -rf x; mkdir x
-            (cd x && magiskboot cpio "../$cp" extract >/dev/null 2>&1) || true
-            while IFS= read -r -d '' ent; do
-                ent=${ent#x/}
-                echo "  [vendor_boot] $c ($fmt): $ent"
-                patch_fstab_file "x/$ent"
-                magiskboot cpio "$cp" "add 0644 $ent x/$ent" >/dev/null 2>&1
-                patched=1
-            done < <(find x -type f -name 'fstab.*' -print0)
-            if [[ $cp != "$c" ]]; then
-                magiskboot compress="$fmt" "$cp" "$c.new" >/dev/null 2>&1 || exit 5
-                mv -f "$c.new" "$c"; rm -f "$cp"
-            fi
-        done
-        rm -rf x
-        [[ $patched == 1 ]] || exit 4
-        magiskboot repack "$img" new.img >/dev/null 2>&1 || exit 5
-        mv -f new.img "$img"
-    ) || {
-        case $? in
-            3) warn "magiskboot gagal unpack vendor_boot" ;;
-            4) warn "tidak ada fstab di ramdisk vendor_boot (mungkin first-stage fstab ada di dtb/boot)" ;;
-            *) warn "repack vendor_boot gagal, pakai vendor_boot asli" ;;
+    command -v lz4 >/dev/null || die "lz4 tidak ada (dibutuhkan untuk vendor ramdisk lz4): apt install lz4"
+    rm -f "$WORK/vendor_boot_recovery"
+    # shellcheck disable=SC2086  # FSTAB_FLAGS sengaja di-split
+    python3 "$SCRIPT_DIR/vendor_boot_fstab.py" "$img" -- $FSTAB_FLAGS > "$lg" 2>&1 || rc=$?
+    while IFS= read -r line; do
+        case $line in
+            RECOVERY_FRAGMENT*) echo "${line#RECOVERY_FRAGMENT }" > "$WORK/vendor_boot_recovery" ;;
+            *) printf '%s\n' "$line" ;;
         esac
-        rm -rf "$t"; return 0
-    }
-    rm -rf "$t"
-    ok "vendor_boot: first-stage fstab dipatch"
+    done < "$lg"
+    case $rc in
+        0) ok "vendor_boot: first-stage fstab dipatch (tabel fragmen konsisten)" ;;
+        4) warn "tidak ada fstab di vendor_boot ramdisk: first-stage fstab mungkin di boot ramdisk/dtb, pastikan tipe fs system/vendor/odm cocok" ;;
+        *) die "patch vendor_boot gagal (rc=$rc). Tanpa ini fstab first-stage tidak cocok dengan partisi yang dibangun ulang -> bootloop. Lihat log di atas" ;;
+    esac
 }
 
 vendor_boot_recovery_warn() {
@@ -1338,6 +1332,10 @@ boot_compat() { # base.img custom.img
         fi
         if [[ ${kb%%-*} != "${kn%%-*}" ]]; then
             warn "sublevel kernel beda (base ${kb%%-*}, custom ${kn%%-*}). GKI biasanya tetap load modul vendor, tapi kalau layar/touch mati setelah boot, cek dmesg 'disagrees about version'"
+        elif [[ $kb != "$kn" ]]; then
+            warn "build kernel beda (base $kb, custom $kn). Modul di vendor_boot (dlkm) & vendor_dlkm dibuat untuk kernel base: kalau CRC simbol beda, modul gagal load (layar/touch/wifi mati). Cek dmesg 'disagrees about version' / 'Unknown symbol'"
+        else
+            ok "boot: kernel custom sama persis dengan kernel base ($kn)"
         fi
     else
         warn "versi kernel tidak bisa dibaca dari salah satu boot.img, kecocokan kernel tidak dicek"
@@ -1542,7 +1540,7 @@ write_recovery_pkg() {
 # ================================================================== MAIN
 main() {
     [[ $RECOVERY_SUPER == raw || $RECOVERY_SUPER == zst ]] || die "RECOVERY_SUPER harus raw atau zst"
-    need curl python3 unzip zip zstd tar gettype extract.erofs mkfs.erofs mke2fs e2fsdroid \
+    need curl python3 unzip zip zstd tar lz4 gettype extract.erofs mkfs.erofs mke2fs e2fsdroid \
          resize2fs lpmake simg2img magiskboot payload-dumper-go
     rm -rf "$WORK" "$OUT"
     mkdir -p "$WORK/dl" "$OUT"

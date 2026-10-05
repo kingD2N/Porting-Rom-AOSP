@@ -140,7 +140,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq aria2 zstd zip unzip e2fsprogs python3 default-jre-headless binutils >/dev/null
+          sudo apt-get install -y -qq aria2 zstd zip unzip e2fsprogs python3 default-jre-headless binutils lz4 cpio >/dev/null
           # secilc: cek compile sepolicy gabungan. Tidak fatal: port.sh hanya memberi warning kalau tidak ada.
           sudo apt-get install -y -qq secilc >/dev/null || echo "::warning::secilc tidak tersedia, cek sepolicy dilewati"
           sudo apt-get install -y -qq apksigner zipalign >/dev/null || true
