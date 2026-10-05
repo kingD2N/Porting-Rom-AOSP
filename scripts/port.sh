@@ -631,14 +631,23 @@ vintf_device_check() {
             < <(find "$B_FS/vendor/etc/vintf" "$B_FS/odm/etc/vintf" -maxdepth 1 -type f -name 'compatibility_matrix*.xml' -print0 2>/dev/null || true)
         python3 "$SCRIPT_DIR/vintf_relax.py" "${relax_hals[@]}" "${mats[@]}" > "$WORK/vintf_relax.log" 2>&1 || true
         grep -v '^RESULT' "$WORK/vintf_relax.log" || true
-        ok "VINTF: HAL framework yang tidak ada di donor dijadikan optional di device matrix vendor: $(printf '%s ' "${relax_hals[@]}" | sed 's/--hal //g')(fiturnya tidak tersedia, tanpa dialog 'internal problem')"
+        ok "VINTF: HAL framework yang tidak ada di donor dijadikan optional di device matrix vendor: $(printf '%s ' "${relax_hals[@]}" | sed 's/--hal //g')(fitur HAL itu tidak tersedia di ROM port)"
         python3 "$SCRIPT_DIR/vintf_check.py" "${args[@]}" > "$WORK/vintf_device.log" 2>&1 || true
     fi
-    n=$(sed -n 's/^RESULT //p' "$WORK/vintf_device.log" | tail -n1)
-    if [[ ${n:-0} =~ ^[0-9]+$ ]] && (( ${n:-0} > 0 )); then
-        warn "VINTF: $n kebutuhan device matrix vendor tidak dipenuhi framework port -> dialog 'internal problem' / HAL terkait gagal (lihat MISSING)"
+    # yang dicek VintfObject.verifyBuildAtBoot (Android 16) = vendor-ndk, system-sdk, sepolicy-version,
+    # kernel-sepolicy-version. Gagal di sini = dialog "There's an internal problem with your device".
+    local dlg hal_miss
+    dlg=$(grep -cE '^MISSING (vendor-ndk|system-sdk|sepolicy-version|kernel-sepolicy-version)' "$WORK/vintf_device.log" || true)
+    hal_miss=$(grep -cE '^MISSING HAL' "$WORK/vintf_device.log" || true)
+    if [[ ${dlg:-0} -gt 0 ]]; then
+        warn "VINTF: $dlg syarat verifyBuildAtBoot TIDAK terpenuhi -> dialog 'internal problem' saat boot (lihat MISSING di atas)"
     else
-        ok "VINTF: semua kebutuhan device matrix vendor/odm dipenuhi framework port"
+        ok "VINTF: syarat verifyBuildAtBoot (vendor-ndk, system-sdk, sepolicy) terpenuhi -> tanpa dialog 'internal problem'"
+    fi
+    if [[ ${hal_miss:-0} -gt 0 ]]; then
+        warn "VINTF: $hal_miss HAL framework yang diminta vendor tidak ada di donor -> fitur terkait tidak jalan (bukan penyebab dialog)"
+    else
+        ok "VINTF: semua HAL framework yang diminta vendor/odm ada di framework port"
     fi
 }
 
