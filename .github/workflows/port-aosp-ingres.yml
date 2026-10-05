@@ -147,6 +147,25 @@ jobs:
           aria2c --version | head -n1
           command -v secilc && secilc --help 2>&1 | head -n1 || true
 
+      - name: Build secilc terbaru (SELinux 3.9)
+        # secilc Ubuntu 24.04 (3.5) tidak kenal sintaks CIL Android 16 (allowx "nlmsg") ->
+        # cek compile sepolicy tidak bisa jalan. Tidak fatal: kalau gagal, port.sh pakai secilc apt.
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -qq flex bison >/dev/null
+          v=3.9
+          mkdir -p secilc-build && cd secilc-build
+          base=https://github.com/SELinuxProject/selinux/releases/download/$v
+          curl -fsSL -o libsepol.tgz "$base/libsepol-$v.tar.gz"
+          curl -fsSL -o secilc.tgz "$base/secilc-$v.tar.gz"
+          tar xzf libsepol.tgz && tar xzf secilc.tgz
+          make -C "libsepol-$v" -j"$(nproc)" >/dev/null
+          make -C "secilc-$v" -j"$(nproc)" secilc CFLAGS="-O2 -I$PWD/libsepol-$v/include" \
+               LDLIBS="$PWD/libsepol-$v/src/libsepol.a" >/dev/null
+          "./secilc-$v/secilc" --help 2>&1 | head -n1 || true
+          echo "SECILC=$PWD/secilc-$v/secilc" >> "$GITHUB_ENV"
+
       - name: Ambil toolkit (pinned)
         run: |
           set -euo pipefail

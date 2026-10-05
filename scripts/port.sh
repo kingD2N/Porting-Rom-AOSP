@@ -635,7 +635,11 @@ linker_check() {
         --erofs-extract "${EXTRACT_EROFS:-$BIN/extract.erofs}" > "$WORK/linker_check.log" 2>&1 || true
     while IFS= read -r d; do printf '    %s\n' "$d"; done < "$WORK/linker_check.log"
     if grep -q 'MISSING' "$WORK/linker_check.log"; then
-        warn "linker: ada library yang dibutuhkan vendor/odm tapi tidak ada di ROM (lihat daftar MISSING) -> HAL terkait bisa gagal start"
+        if grep -q '64-bit: semua dependensi ditemukan' "$WORK/linker_check.log" && [[ ! -f $P_FS/system/system/lib/libc.so ]]; then
+            log "linker: yang hilang hanya library 32-bit (system donor 64-bit only) -> lihat cek ABI: masalah hanya kalau vendor punya proses 32-bit"
+        else
+            warn "linker: ada library yang dibutuhkan vendor/odm tapi tidak ada di ROM (lihat daftar MISSING) -> HAL terkait bisa gagal start"
+        fi
     fi
 }
 
@@ -1647,7 +1651,7 @@ main() {
     rid=$(rom_identity); port_name=${rid%% *}; port_ver=${rid#* }
     log "donor=${donor:-?}  base=$base_dev ($btype)  ROM=$port_name  versi=$port_ver"
     [[ -n $donor ]] || warn "codename donor tidak terdeteksi -> RRO khas donor hanya dibuang lewat DEVICE_OVERLAY_GLOBS"
-    if [[ -f $P_FS/system/system/build.prop ]] && grep -qsE '^ro\.(miui|mi\.os)\.' "$P_FS/system/system/build.prop" "$P_FS/product/etc/build.prop"; then
+    if is_miui_tree "$P_FS"; then
         warn "ROM donor terlihat seperti MIUI/HyperOS, bukan AOSP. Untuk port HyperOS pakai repo port HyperOS"
     fi
 

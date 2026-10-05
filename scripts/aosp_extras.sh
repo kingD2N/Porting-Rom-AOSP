@@ -40,12 +40,21 @@ has_codename() {
     [[ ${#c} -ge 3 && $t == *"$c"* ]]
 }
 
+# MIUI/HyperOS asli: punya versi UI MIUI/HyperOS atau framework MIUI. Props ro.miui.* lain
+# (mis. ro.miui.notch, dipakai port MiuiCamera di ROM AOSP) tidak dihitung.
+is_miui_tree() { # root (berisi system/system, product, vendor, ...)
+    local r=$1
+    grep -qsE '^ro\.(miui\.ui\.version\.(code|name)|mi\.os\.version\.(name|incremental))=' \
+        "$r/system/system/build.prop" "$r/product/etc/build.prop" "$r/mi_ext/etc/build.prop" \
+        "$r/vendor/build.prop" "$r"/odm/etc/*build.prop && return 0
+    [[ -f $r/system_ext/framework/miui-services.jar || -f $r/system/system/framework/miui-framework.jar ]]
+}
+
 detect_base_type() {
     case ${BASE_TYPE,,} in
         aosp|hyperos) echo "${BASE_TYPE,,}"; return 0 ;;
     esac
-    if [[ -f $B_IMG/mi_ext.img ]] || grep -qsE '^ro\.(miui|mi\.os)\.' \
-            "$B_FS/product/etc/build.prop" "$B_FS/vendor/build.prop" "$B_FS"/odm/etc/*build.prop; then
+    if [[ -f $B_IMG/mi_ext.img ]] || is_miui_tree "$B_FS"; then
         echo hyperos
     else
         echo aosp
@@ -207,12 +216,14 @@ UPDATER_DIRS="Updater MiuiUpdater Updates SystemUpdater SystemUpdate OTAUpdater 
 UPDATER_PKG_RE='(^|[.])(updater|ota|otaupdater|updates|systemupdate|systemupdater)$'
 remove_updater() {
     local d n=0 pkg dir
+    # (filter nama di loop utama: pipeline "while ... && printf" mengembalikan 1 untuk item
+    #  terakhir yang bukan updater -> trap ERR di subshell -> "[fail]" palsu di log)
     while IFS= read -r -d '' d; do
+        in_list "$(basename "$d")" "$UPDATER_DIRS" || continue
         rm -rf "$d"; n=$((n + 1))
         ok "updater: ${d#"$P_FS"/} dihapus (OTA donor tidak boleh ter-install di ingres)"
     done < <(find "$P_FS/product" "$P_FS/system_ext" "$P_FS/system/system" -mindepth 2 -maxdepth 2 -type d \
-                \( -path '*/app/*' -o -path '*/priv-app/*' \) -print0 2>/dev/null \
-             | while IFS= read -r -d '' x; do in_list "$(basename "$x")" "$UPDATER_DIRS" && printf '%s\0' "$x"; done)
+                \( -path '*/app/*' -o -path '*/priv-app/*' \) -print0 2>/dev/null || true)
     while IFS=$'\t' read -r pkg dir; do
         [[ -n $pkg && -d $P_FS/$dir ]] || continue
         case $pkg in com.google.*|com.android.vending) continue ;; esac
@@ -224,14 +235,32 @@ remove_updater() {
 
 # ------------------------------------------------------------------ cek tambahan
 abi_check() {
-    local v32 s32
+    local v32 s32 res n
     v32=$(find "$B_FS/vendor/lib" "$B_FS/odm/lib" -maxdepth 1 -name '*.so' -print -quit 2>/dev/null || true)
     s32=$(find "$P_FS/system/system/lib" -maxdepth 1 -name 'libc.so' -print -quit 2>/dev/null || true)
     if [[ -z $v32 ]]; then ok "ABI: vendor base 64-bit only"; return 0; fi
     if [[ -n $s32 ]]; then
         ok "ABI: vendor base punya library 32-bit, system donor juga punya /system/lib (32-bit) -> cocok"
+        return 0
+    fi
+    # system donor 64-bit only: library 32-bit vendor cuma bermasalah kalau ada proses 32-bit vendor
+    res=$(python3 "$SCRIPT_DIR/elf_scan.py" "$B_FS/vendor" "$B_FS/odm" 2>/dev/null || echo "RESULT ?")
+    n=$(sed -n 's/^RESULT //p' <<< "$res" | tail -n1)
+    if [[ $n == 0 ]]; then
+        ok "ABI: system donor 64-bit only, vendor ingres tidak punya daemon/HAL 32-bit (library 32-bit vendor tidak terpakai)"
     else
-        warn "ABI: vendor base butuh 32-bit (vendor/lib) tapi system donor 64-bit only (tidak ada /system/lib/libc.so) -> HAL/daemon 32-bit vendor gagal start. Pakai donor yang masih 64_32 (zygote64_32)"
+        warn "ABI: system donor 64-bit only, tapi vendor ingres punya ${n} executable 32-bit -> proses ini gagal start (cek fiturnya setelah boot):"
+        grep -v '^RESULT' <<< "$res" | head -n 20 | while IFS= read -r line; do printf '    %s\n' "$line" >&2; done
+    fi
+    # vendor mengiklankan ABI 32-bit (ro.vendor.product.cpu.abilist32). init memakai partisi
+    # prioritas tertinggi yang mengisi abilist (product > odm > vendor > system) -> paksa 64-bit
+    # di product supaya framework tidak mengira 32-bit didukung (app 32-bit / zygote_secondary).
+    local pp="$P_FS/product/etc/build.prop"
+    if [[ -f $pp ]]; then
+        set_prop "$pp" ro.product.product.cpu.abilist arm64-v8a
+        set_prop "$pp" ro.product.product.cpu.abilist64 arm64-v8a
+        set_prop "$pp" ro.product.product.cpu.abilist32 ""
+        ok "ABI: ro.product.product.cpu.abilist=arm64-v8a (abilist32 kosong) di product, cocok dengan system donor"
     fi
 }
 
@@ -263,6 +292,12 @@ vintf_tool_check() {
     args+=(--dirmap "/apex:$WORK/vintf_apex" --property apex.all.ready=true)
     timeout 300 "$cv" "${args[@]}" > "$WORK/checkvintf.log" 2>&1 || rc=$?
     rm -rf "$WORK/vintf_apex"
+    if grep -qE 'Unrecognized (manifest|compatibility-matrix)\.version' "$WORK/checkvintf.log"; then
+        local why
+        why=$(grep -oE 'Unrecognized [a-z.-]+version [0-9.]+ \(libvintf@[0-9.]+\)' "$WORK/checkvintf.log" | head -n1 || true)
+        log "checkvintf: libvintf di toolkit lebih tua dari Android donor (${why:-format VINTF baru}), cek dilewati. Cek VINTF di atas (vintf_check) tetap berlaku"
+        return 0
+    fi
     if [[ $rc -eq 0 ]]; then
         ok "checkvintf: framework donor COMPATIBLE dengan vendor/odm ingres"
     else
@@ -278,7 +313,9 @@ vintf_tool_check() {
 sepolicy_compile_check() {
     local ver sys="$P_FS/system/system/etc/selinux" vs="$B_FS/vendor/etc/selinux" args=() d n rc=0
     is_true "$SEPOLICY_CHECK" || return 0
-    if ! command -v secilc >/dev/null; then warn "sepolicy: secilc tidak terpasang (apt install secilc), cek compile dilewati"; return 0; fi
+    local sc=${SECILC:-secilc}
+    if ! command -v "$sc" >/dev/null; then warn "sepolicy: secilc tidak terpasang, cek compile dilewati"; return 0; fi
+    log "sepolicy: compiler $sc"
     ver=$(tr -d '[:space:]' < "$vs/plat_sepolicy_vers.txt" 2>/dev/null || true)
     if [[ -z $ver ]]; then warn "sepolicy: vendor/etc/selinux/plat_sepolicy_vers.txt tidak ada, cek dilewati"; return 0; fi
     if [[ ! -f $sys/plat_sepolicy.cil || ! -f $sys/mapping/$ver.cil || ! -f $vs/vendor_sepolicy.cil ]]; then
@@ -299,7 +336,7 @@ sepolicy_compile_check() {
     args+=("$vs/vendor_sepolicy.cil")
     if [[ -f $B_FS/odm/etc/selinux/odm_sepolicy.cil ]]; then args+=("$B_FS/odm/etc/selinux/odm_sepolicy.cil"); fi
     log "sepolicy: secilc ${#args[@]} argumen, vendor plat version $ver"
-    timeout 600 secilc "${args[@]}" -o "$WORK/sepolicy.compiled" -f /dev/null > "$WORK/secilc.log" 2>&1 || rc=$?
+    timeout 600 "$sc" "${args[@]}" -o "$WORK/sepolicy.compiled" -f /dev/null > "$WORK/secilc.log" 2>&1 || rc=$?
     rm -f "$WORK/sepolicy.compiled"
     if [[ $rc -eq 0 ]]; then
         ok "sepolicy: gabungan system donor + vendor ingres BERHASIL di-compile (seperti init saat boot)"
@@ -310,7 +347,11 @@ sepolicy_compile_check() {
         warn "sepolicy: GAGAL compile - vendor/odm ingres merujuk type yang tidak ada di system/system_ext/product donor -> init gagal load sepolicy = bootloop ke recovery. Biasanya karena ROM base & donor beda basis (mis. LineageOS vs AOSP murni): pakai donor dengan basis sama dengan base"
         if is_true "$SEPOLICY_STRICT"; then die "sepolicy gabungan tidak bisa di-compile (SEPOLICY_STRICT=true)"; fi
     else
-        warn "sepolicy: secilc host gagal (rc=$rc) dengan error yang bukan resolve type - bisa jadi secilc Ubuntu lebih tua dari CIL Android donor. Anggap informasi, bukan vonis"
+        if grep -qiE 'Unknown permissionx kind|Invalid syntax|Unknown keyword|Unexpected' "$WORK/secilc.log"; then
+            warn "sepolicy: secilc ($sc) terlalu tua untuk CIL Android donor (sintaks baru tak dikenal), cek dilewati. Workflow membangun secilc terbaru di step 'Build secilc'; cek step itu"
+        else
+            warn "sepolicy: secilc gagal (rc=$rc) dengan error yang bukan resolve type - anggap informasi, bukan vonis"
+        fi
     fi
 }
 
