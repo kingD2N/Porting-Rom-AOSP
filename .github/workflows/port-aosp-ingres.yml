@@ -165,8 +165,21 @@ jobs:
           stage="$PWD/stage"
           make -C "libsepol-$v" -j"$(nproc)" >/dev/null
           make -C "libsepol-$v" DESTDIR="$stage" PREFIX=/usr install >/dev/null
+          # Makefile secilc selalu menambah "-lsepol" (override LDLIBS) dan runner tidak punya
+          # libsepol-dev -> folder -L yang HANYA berisi libsepol.a = link statis ke libsepol 3.9
+          mkdir -p "$stage/static"
+          cp "$(find "$stage/usr" -name libsepol.a | head -n1)" "$stage/static/"
           make -C "secilc-$v" -j"$(nproc)" secilc CFLAGS="-O2 -I$stage/usr/include" \
-               LDLIBS="$(find "$stage" -name libsepol.a | head -n1)" >/dev/null
+               LDFLAGS="-L$stage/static" >/dev/null
+          # uji sintaks Android 16: allowx ... nlmsg harus lolos
+          printf '%s\n' '(class netlink_route_socket (nlmsg))' '(classorder (netlink_route_socket))' \
+            '(sid kernel) (sidorder (kernel)) (user u) (role r) (type t) (category c0) (sensitivity s0)' \
+            '(sensitivityorder (s0)) (sensitivitycategory s0 (c0)) (categoryorder (c0)) (level lvl (s0))' \
+            '(userrole u r) (roletype r t) (userlevel u lvl) (userrange u (lvl lvl)) (sidcontext kernel (u r t (lvl lvl)))' \
+            '(allow t self (netlink_route_socket (nlmsg)))' \
+            '(allowx t self (nlmsg netlink_route_socket (range 0x10 0x12)))' > nlmsg_test.cil
+          "./secilc-$v/secilc" -M true -c 33 -o /dev/null -f /dev/null nlmsg_test.cil \
+            && echo "secilc 3.9: sintaks nlmsg OK" || echo "::warning::secilc 3.9 belum mengenal nlmsg"
           "./secilc-$v/secilc" --help 2>&1 | head -n1 || true
           echo "SECILC=$PWD/secilc-$v/secilc" >> "$GITHUB_ENV"
 
