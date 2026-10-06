@@ -175,7 +175,7 @@ fcm_from_base() {
 
 # COPY_FROM_BASE: path bebas dari base (product/..., system_ext/..., system/...)
 copy_from_base() {
-    local items=() extras=() rel part sub src dst tmp apk info uid pkg hpkg n=0 donor_pkgs="" hal_apps=()
+    local items=() extras=() rel part sub src dst tmp apk info uid pkg hpkg n=0 donor_pkgs="" hal_apps=() aperture=false
     read -r -a items <<< "$COPY_FROM_BASE"
     if is_true "${BASE_EXTRAS:-false}"; then
         read -r -a extras <<< "${BASE_EXTRA_PATHS:-}"
@@ -249,11 +249,38 @@ copy_from_base() {
             hal_apps+=("$hpkg")
         fi
         n=$((n + 1)); ok "COPY_FROM_BASE: $rel disalin"
+        if [[ -n $apk && ${info%%$'\t'*} == org.lineageos.aperture ]]; then aperture=true; fi
         if [[ $rel == */priv-app/* && $part != system ]]; then base_privapp_perms "$rel"; fi
     done
     rm -rf "$WORK"/base_copy_*
     ok "COPY_FROM_BASE: $n path disalin"
     for pkg in "${hal_apps[@]}"; do base_app_hal_sepolicy "$pkg"; done
+    if is_true "$aperture"; then replace_donor_camera; fi
+}
+
+# Kamera MIUI bawaan donor (MiuiCamera, package com.android.camera) dikalibrasi untuk sensor &
+# vendor device donor (mis. marble). Vendor LineageOS ingres tidak punya dukungan kamera MIUI
+# (tanpa persist.vendor.camera.privapp.list dkk) -> crash / lensa tidak lengkap. Kalau Aperture
+# dari base sudah tersalin, kamera donor dibuang supaya Aperture jadi kamera bawaan.
+replace_donor_camera() {
+    is_true "${DEBLOAT_DONOR_CAMERA:-true}" || return 0
+    local pkg dir n=0 f
+    while IFS=$'\t' read -r pkg dir; do
+        [[ -n $dir && -d $P_FS/$dir ]] || continue
+        case $pkg in
+            com.android.camera|com.xiaomi.camera|com.miui.camera) ;;
+            *) case $(basename "$dir") in MiuiCamera*) ;; *) continue ;; esac ;;
+        esac
+        rm -rf "${P_FS:?}/$dir"; n=$((n + 1))
+        ok "kamera donor dibuang: $dir ($pkg) -> kamera bawaan = Aperture (LineageOS ingres)"
+    done < <(python3 "$SCRIPT_DIR/apk_index.py" "$P_FS" || true)
+    # overlay & config milik kamera MIUI ikut dibuang (tanpa app-nya tidak berguna)
+    while IFS= read -r -d '' f; do
+        rm -f "$f"; n=$((n + 1)); log "  dibuang: ${f#"$P_FS"/}"
+    done < <(find "$P_FS/system/system" "$P_FS/system_ext" "$P_FS/product" \
+                \( -path '*/overlay/MiuiCameraOverlay*.apk' -o -path '*/etc/permissions/*miuicamera*.xml' \
+                   -o -path '*/etc/sysconfig/*miuicamera*.xml' \) -print0 2>/dev/null || true)
+    if [[ $n -eq 0 ]]; then log "kamera donor: tidak ada kamera MIUI di ROM donor, Aperture dipakai"; fi
 }
 
 # Aplikasi hardware LineageOS dari base (GameKeys = tombol bahu, Leds = LED RGB belakang) ditandatangani
