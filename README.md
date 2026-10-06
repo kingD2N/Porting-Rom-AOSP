@@ -36,6 +36,10 @@ Lalu `scripts/port.sh` mem-patch bagian yang biasanya bikin port gagal boot:
   - `priv_app`/`platform_app` ditambahkan sebagai client HAL-nya di `system_ext_sepolicy.cil` donor (ikut dicek secilc; kalau bikin compile gagal, baris itu dibuang otomatis).
   - Kalau `framework-res.apk` donor ditandatangani **test-key AOSP publik** (umum di build unofficial), GameKeys & Leds ditandatangani ulang dengan kunci itu -> jadi `platform_app`, semua izinnya terpenuhi.
   - Kalau donor memakai kunci privat: **Leds tetap disalin** (cukup HAL, berjalan sebagai `priv_app`), **GameKeys tidak disalin**. GameKeys memanggil `registerTaskStackListener` (izin `MANAGE_ACTIVITY_TASKS`, hanya untuk kunci platform) saat start tanpa penanganan error, jadi tanpa kunci platform donor app itu crash berulang dan tombol bahu tetap tidak jalan. Fitur yang memakai aplikasi LineageOS lain (LiveDisplay, touch polling rate di LineageParts, Wi-Fi Display/`wfdservice`) tidak ikut dan tidak tersedia di ROM port.
+- **Addon MIUI Camera & Dolby Atmos (`addons`, default `miuicamera dolby`):** bahan diambil saat build dari repo Gurinbone (sama dengan yang dipakai build LineageOS ingres), dipasang setelah debloat, lalu ikut dicek secilc.
+  - **`miuicamera`**: [android_device_xiaomi_miuicamera-ingres](https://github.com/Gurinbone/android_device_xiaomi_miuicamera-ingres) + [android_vendor_xiaomi_miuicamera-ingres](https://github.com/Gurinbone/android_vendor_xiaomi_miuicamera-ingres) (`lineage-23.2`). `MiuiCamera.apk` (git LFS, ~195 MB, sha256 dicek) -> `system/priv-app/MiuiCamera`, library JNI kamera + `libgui_shim_miuicamera.so` (prebuilt dari `addons/miuicamera/`, source ikut) -> `system/lib64`, `public.libraries-xiaomi.txt`, allowlist privapp, hiddenapi, props `persist.vendor.camera.privapp.list` dkk, dan sepolicy kamera (`addons/miuicamera/sepolicy.cil`) untuk `platform_app` + `priv_app`. Sisi vendor (campostproc, libmialgo) sudah ada di vendor LineageOS ingres. Kamera MIUI bawaan donor (dikalibrasi untuk device donor) selalu dibuang dulu karena package-nya sama. APK di repo sudah di-patch (tanda tangan rusak), jadi ditandatangani ulang: kunci platform donor kalau donor test-key AOSP, selain itu testkey AOSP (jalan sebagai `priv_app`; izin signature-only seperti `INJECT_EVENTS` tidak didapat, fungsi kamera tetap jalan). Aperture tetap ada sebagai cadangan.
+  - **`dolby`**: [hardware_dolby](https://github.com/Gurinbone/hardware_dolby) (`Dolby-Vision-2.1`). Ke vendor: HAL `vendor.dolby.hardware.dms@2.0-service` + library DAX, `libstagefright_foundation-v33` (dibuat dari `-dolby`, hanya SONAME beda), efek `libswdap`/`libdlbvol`/`libswgamedap`/`libswvqe` ditambahkan ke semua `audio_effects.xml` SKU (volume helper music/ring/alarm/notification diganti volume listener Dolby, hasilnya sama persis dengan tree Gurinbone), init rc, manifest VINTF, props `ro.vendor.dolby.dax.version`, sepolicy `hal_dms` (`addons/dolby/sepolicy.cil`) + `vendor_file_contexts`/`vendor_hwservice_contexts`. Ke system_ext: **DaxUI** (aplikasi Dolby Atmos) + **daxService**, AudioFX/MusicFX donor dibuang (bentrok efek global). Tidak ikut: Dolby Vision, codec2 Dolby, spatializer (butuh library codec2/head-tracker yang tidak ada di vendor LineageOS ingres). **LunarisDolby** (`packages_apps_DolbyUI`) hanya berupa source Kotlin/Compose yang harus di-build di source tree AOSP, dan memakai `sharedUserId=android.uid.system` (wajib kunci platform ROM itu sendiri), jadi UI yang dipakai DaxUI bawaan hardware_dolby (mengontrol HAL & efek yang sama).
+  - Pengaman: semua library addon dicek dependensinya (DT_NEEDED) terhadap ROM hasil port; kalau ada yang kurang, addon itu dilewati. Label SELinux file baru ditulis persis (bukan ditebak). Kalau sepolicy gabungan gagal di-compile karena baris addon, **semua addon dibatalkan otomatis** (file, contexts, sepolicy, audio_effects kembali seperti semula) sehingga ROM tetap bisa boot tanpa addon.
 - **vendor_boot v4 berfragmen:** first-stage fstab dipatch per fragmen (platform/dlkm/recovery) oleh `scripts/vendor_boot_fstab.py`, tabel fragmen & ukuran ikut diperbarui. (magiskboot toolkit menggabung semua fragmen jadi satu dan tidak memperbarui tabel -> modul dlkm rusak -> bootloop; LineageOS/AxionOS sm8450 memakai fragmen `dlkm`.)
 - **Cek ekstrak per path:** setiap entri `fs_config` dicek ada di disk; entri sintetis `lost+found` dari imgextractor (ext4) diabaikan, jadi partisi kecil seperti `odm` ext4 tidak gagal palsu.
 - **Flash aman:** partisi kalibrasi/data (`persist`, `modemst1/2`, `fsg`, `frp`, ...) tidak pernah di-flash. Base fastboot Xiaomi: hanya image yang memang di-flash `flash_all.sh`.
@@ -103,6 +107,7 @@ images/super.img.zst            super (system/system_ext/product donor + vendor/
 | `debloat` | path/package tambahan, pisah spasi. Boleh kosong |
 | `copy_from_base` | path dari base yang ikut disalin, mis. `product/overlay/FooIngres.apk`. APK `sharedUserId=android.uid.system` dilewati (beda kunci platform). priv-app: allowlist izin base + semua izin yang diminta APK ditulis ulang (APK base bertanda tangan platform base, di donor izinnya lewat jalur privileged) |
 | `base_extras` | `true` = GameKeys (tombol bahu) + Leds (LED RGB) + Aperture (kamera) dari base LineageOS |
+| `addons` | `miuicamera dolby` (default). `miuicamera` = MIUI Camera ingres, `dolby` = Dolby Atmos DAX. Kosong / `none` = tanpa addon |
 | `boot_img_url` | default boot.img D2N (5.10.271-gki-MIX); kosongkan = kernel ROM base |
 | `disable_encryption` | `true` untuk test build pertama |
 | `rw_mount` | `true` (hanya partisi EXT4 yang dibangun ulang: system, system_ext, product, vendor, odm. `vendor_dlkm` dari base tetap read-only) |
@@ -151,6 +156,8 @@ Balik ke recovery sendiri setelah logo = biasanya sepolicy (`init: ... Failed to
 | `NEVER_FLASH` | partisi yang tidak pernah di-flash (di `scripts/port.sh`) |
 | `RECOVERY_SUPER` | `zst` (default) / `raw` |
 | `HYPEROS_BASE_OVERLAYS` | RRO yang disalin dari base HyperOS (default `AospFrameworkResOverlay`) |
+| `MIUICAMERA_DEVICE_REPO`, `MIUICAMERA_VENDOR_REPO`, `MIUICAMERA_BRANCH` | sumber addon MiuiCamera (default Gurinbone, `lineage-23.2`) |
+| `DOLBY_REPO`, `DOLBY_BRANCH` | sumber addon Dolby (default Gurinbone/hardware_dolby, `Dolby-Vision-2.1`) |
 | `ALLOW_OTHER_BASE` | `true` = izinkan base yang bukan ingres (bahaya, firmware ikut di-flash) |
 
 File yang mau dipaksa ke versi ingres: taruh di `devices/ingres/<partisi>/...` (lihat `devices/ingres/README.md`).
@@ -179,6 +186,10 @@ File yang mau dipaksa ke versi ingres: taruh di `devices/ingres/<partisi>/...` (
 .github/workflows/port-aosp-ingres.yml   workflow utama
 scripts/port.sh                          proses port
 scripts/aosp_extras.sh                   overlay, updater, displayconfig, FCM, cek sepolicy/checkvintf/ABI/IMS
+scripts/addons.sh                        addon MIUI Camera & Dolby Atmos (stage, cek dependensi, pasang, rollback)
+scripts/addon_tool.py                    helper addon: CIL template -> policy vendor, label SELinux, audio_effects.xml, allowlist
+addons/miuicamera/                       sepolicy kamera (CIL) + shim libgui (prebuilt + source)
+addons/dolby/                            sepolicy hal_dms (CIL)
 scripts/make_ota.py                      bangun zip OTA A/B (payload.bin, payload_properties.txt, apex_info.pb, metadata)
 scripts/lp_tool.py                       metadata super & payload.bin
 scripts/lpunpack_compat.py               jalankan lpunpack.py toolkit di Python 3.13+
@@ -207,6 +218,7 @@ devices/ingres/                          file khusus ingres
 
 - Repo asal port HyperOS -> marble
 - [toraidl/hyperos_port](https://github.com/toraidl/hyperos_port) (toolkit: lpmake, extract.erofs, magiskboot, checkvintf, ...)
+- [Gurinbone](https://github.com/Gurinbone) (MiuiCamera ingres, hardware_dolby), [Ingres-Centre](https://github.com/Ingres-Centre) (LineageOS ingres)
 - [sekaiacg/erofs-utils](https://github.com/sekaiacg/erofs-utils)
 
 ---

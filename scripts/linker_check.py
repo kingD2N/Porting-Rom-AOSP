@@ -173,11 +173,32 @@ def main():
     ap.add_argument("--apex", action="append", default=[])
     ap.add_argument("--erofs-extract", default="")
     ap.add_argument("--top", type=int, default=30)
+    ap.add_argument("--apex-cache", default="",
+                    help="file cache nama library APEX (dibuat kalau belum ada, dipakai ulang kalau ada)")
     a = ap.parse_args()
 
     lib64, lib32, apexes = set(), set(), []
     collect_provided(a.provide + a.check, lib64, lib32)
-    collect_apex(a.apex, a.erofs_extract, lib64, lib32, apexes)
+    if a.apex_cache and os.path.isfile(a.apex_cache):
+        with open(a.apex_cache, encoding="utf-8") as f:
+            for line in f:
+                kind, _, name = line.strip().partition(" ")
+                if kind == "64":
+                    lib64.add(name)
+                elif kind == "32":
+                    lib32.add(name)
+                elif kind == "apex":
+                    apexes.append(name)
+    else:
+        a64, a32 = set(), set()
+        collect_apex(a.apex, a.erofs_extract, a64, a32, apexes)
+        lib64 |= a64
+        lib32 |= a32
+        if a.apex_cache:
+            with open(a.apex_cache, "w", encoding="utf-8") as f:
+                f.writelines("64 %s\n" % n for n in sorted(a64))
+                f.writelines("32 %s\n" % n for n in sorted(a32))
+                f.writelines("apex %s\n" % n for n in apexes)
 
     missing = {64: defaultdict(list), 32: defaultdict(list)}
     scanned = 0

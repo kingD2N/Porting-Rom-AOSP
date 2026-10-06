@@ -262,9 +262,10 @@ copy_from_base() {
 # vendor device donor (mis. marble). Vendor LineageOS ingres tidak punya dukungan kamera MIUI
 # (tanpa persist.vendor.camera.privapp.list dkk) -> crash / lensa tidak lengkap. Kalau Aperture
 # dari base sudah tersalin, kamera donor dibuang supaya Aperture jadi kamera bawaan.
-replace_donor_camera() {
-    is_true "${DEBLOAT_DONOR_CAMERA:-true}" || return 0
-    local pkg dir n=0 f
+replace_donor_camera() { # [label kamera pengganti]
+    local repl=${1:-Aperture (LineageOS ingres)} pkg dir n=0 f
+    # addon MiuiCamera memakai package yang sama (com.android.camera) -> milik donor wajib dibuang
+    if [[ -z ${1:-} ]] && ! is_true "${DEBLOAT_DONOR_CAMERA:-true}"; then return 0; fi
     while IFS=$'\t' read -r pkg dir; do
         [[ -n $dir && -d $P_FS/$dir ]] || continue
         case $pkg in
@@ -272,7 +273,7 @@ replace_donor_camera() {
             *) case $(basename "$dir") in MiuiCamera*) ;; *) continue ;; esac ;;
         esac
         rm -rf "${P_FS:?}/$dir"; n=$((n + 1))
-        ok "kamera donor dibuang: $dir ($pkg) -> kamera bawaan = Aperture (LineageOS ingres)"
+        ok "kamera donor dibuang: $dir ($pkg) -> kamera bawaan = $repl"
     done < <(python3 "$SCRIPT_DIR/apk_index.py" "$P_FS" || true)
     # overlay & config milik kamera MIUI ikut dibuang (tanpa app-nya tidak berguna)
     while IFS= read -r -d '' f; do
@@ -280,7 +281,7 @@ replace_donor_camera() {
     done < <(find "$P_FS/system/system" "$P_FS/system_ext" "$P_FS/product" \
                 \( -path '*/overlay/MiuiCameraOverlay*.apk' -o -path '*/etc/permissions/*miuicamera*.xml' \
                    -o -path '*/etc/sysconfig/*miuicamera*.xml' \) -print0 2>/dev/null || true)
-    if [[ $n -eq 0 ]]; then log "kamera donor: tidak ada kamera MIUI di ROM donor, Aperture dipakai"; fi
+    if [[ $n -eq 0 ]]; then log "kamera donor: tidak ada kamera MIUI di ROM donor, $repl dipakai"; fi
 }
 
 # Aplikasi hardware LineageOS dari base (GameKeys = tombol bahu, Leds = LED RGB belakang) ditandatangani
@@ -613,6 +614,22 @@ sepolicy_compile_check() {
         rc=0
         timeout 600 "$sc" "${args[@]}" -o "$WORK/sepolicy.compiled" -f /dev/null > "$WORK/secilc.log" 2>&1 || rc=$?
     done
+    # baris sepolicy addon (MiuiCamera/Dolby) bikin compile gagal -> SEMUA addon dibatalkan
+    # (file, contexts, sepolicy kembali seperti semula), compile ulang. Addon hilang, ROM tetap bisa boot
+    if [[ $rc -ne 0 ]] && grep -qF "${ADDON_CIL_TAG:-; [port-addon]}" "$vs/vendor_sepolicy.cil" 2>/dev/null \
+            && declare -F addon_rollback >/dev/null; then
+        local done_addons="${ADDON_DONE[*]:-}"
+        addon_rollback all
+        # salinan sementara (strip policycap) ikut dibersihkan dari baris addon
+        for f in "${args[@]}"; do
+            if [[ $f == "$tmpd"/* ]]; then grep -vF "$ADDON_CIL_TAG" "$f" > "$f.x" || true; mv -f "$f.x" "$f"; fi
+        done
+        rc=0
+        timeout 600 "$sc" "${args[@]}" -o "$WORK/sepolicy.compiled" -f /dev/null > "$WORK/secilc.log" 2>&1 || rc=$?
+        if [[ $rc -eq 0 ]]; then
+            warn "sepolicy: baris addon ($done_addons) bikin compile gagal -> semua addon DIBATALKAN; sepolicy kembali aman (ROM tanpa addon)"
+        fi
+    fi
     # baris tambahan port (izin HAL app base) ternyata bikin compile gagal -> buang, compile ulang.
     # Lebih baik fitur GameKeys/Leds mati daripada sepolicy gagal dimuat (bootloop)
     if [[ $rc -ne 0 ]] && grep -qF "$PORT_CIL_TAG" "$P_FS/system_ext/etc/selinux/system_ext_sepolicy.cil" 2>/dev/null; then

@@ -136,6 +136,9 @@ need() { local t; for t in "$@"; do command -v "$t" >/dev/null || die "tool tida
 # fungsi khusus AOSP: overlay, updater, displayconfig, FCM, sepolicy/VINTF check, identitas ROM
 # shellcheck source-path=SCRIPTDIR source=aosp_extras.sh
 source "$SCRIPT_DIR/aosp_extras.sh"
+# addon opsional: MiuiCamera ingres, Dolby Atmos (ADDONS)
+# shellcheck source-path=SCRIPTDIR source=addons.sh
+source "$SCRIPT_DIR/addons.sh"
 
 # ------------------------------------------------------------------ fetch
 # link "halaman web" (Google Drive /view, SourceForge, Pixeldrain /u/, MediaFire) diubah ke link
@@ -1868,6 +1871,7 @@ main() {
     if is_true "$OVERLAY_FIX"; then fix_overlays "$donor"; fi
     report_app_sizes
     patch_port_resources "$btype" "$base_dev"
+    run_addons
     apply_device_files
     remove_updater
     vintf_tool_check

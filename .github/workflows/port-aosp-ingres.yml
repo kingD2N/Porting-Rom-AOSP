@@ -45,6 +45,11 @@ on:
         required: false
         default: true
         type: boolean
+      addons:
+        description: "Addon (pisah spasi): miuicamera = MIUI Camera ingres, dolby = Dolby Atmos (DAX). Kosong/none = tanpa addon"
+        required: false
+        default: "miuicamera dolby"
+        type: string
       boot_img_url:
         description: "URL boot.img custom (default: kernel D2N 5.10.271-gki-MIX). Kosongkan = boot.img ROM base"
         required: false
@@ -257,6 +262,7 @@ jobs:
           DEBLOAT: ${{ inputs.debloat }}
           COPY_FROM_BASE: ${{ inputs.copy_from_base }}
           BASE_EXTRAS: ${{ inputs.base_extras }}
+          ADDONS: ${{ inputs.addons }}
           PACKAGE_TYPE: ${{ inputs.package_type }}
           BOOT_IMG: ${{ inputs.boot_img_url }}
           DISABLE_ENCRYPTION: ${{ inputs.disable_encryption }}
@@ -359,6 +365,7 @@ jobs:
           DEBUG_ADB: ${{ inputs.debug_adb }}
           BOOT: ${{ inputs.boot_img_url }}
           PKG: ${{ inputs.package_type }}
+          ADDONS_IN: ${{ inputs.addons }}
         run: |
           {
             echo "## Port AOSP -> ${TARGET_DEVICE}"
@@ -375,6 +382,7 @@ jobs:
             echo "| RW | ${RW_MOUNT} |"
             echo "| Debug ADB | ${DEBUG_ADB} |"
             echo "| Paket | ${PKG:-ota} |"
+            echo "| Addons | ${ADDONS_IN:-none} |"
             if [ -n "${GDRIVE_LINK:-}" ]; then echo "| Google Drive | ${GDRIVE_LINK} |"; fi
             if ls out/*.sha256 >/dev/null 2>&1; then
               echo
