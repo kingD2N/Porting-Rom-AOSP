@@ -450,6 +450,42 @@ abi_check() {
     fi
 }
 
+# ro.zygote (diisi vendor) menentukan rc zygote yang di-import init.rc: /system/etc/init/hw/init.${ro.zygote}.rc.
+# Vendor ingres: zygote64_32 (zygote 64-bit + zygote_secondary 32-bit/app_process32). System donor
+# 64-bit only tidak punya app_process32 (dan biasanya tidak punya init.zygote64_32.rc):
+#   - rc tidak ada  -> zygote tidak pernah start -> macet di logo (bootloop)
+#   - rc ada        -> zygote_secondary gagal terus, "onrestart restart zygote" -> system_server restart terus
+# Product dimuat terakhir oleh init -> ro.zygote ditimpa di product sesuai kemampuan system donor.
+PROPS_PORT_FORCED=""   # props yang sengaja diisi port di product (tidak dibuang props_effective)
+zygote_check() {
+    local sys="$P_FS/system/system" pp="$P_FS/product/etc/build.prop" z="" f v want has32=false
+    for f in "$sys/build.prop" "$P_FS/system_ext/etc/build.prop" "$B_FS/vendor/default.prop" \
+             "$B_FS/vendor/build.prop" "$B_FS/odm/etc/build.prop" "$pp"; do
+        v=$(get_prop "$f" ro.zygote); [[ -n $v ]] && z=$v
+    done
+    [[ -n $z ]] || z=zygote32
+    if [[ -e $sys/bin/app_process32 ]]; then has32=true; fi
+    want=$z
+    if ! is_true "$has32" && [[ $z == *32* ]]; then want=zygote64; fi
+    if [[ $want != "$z" ]]; then
+        if [[ ! -f $sys/etc/init/hw/init.$want.rc ]]; then
+            warn "zygote: ro.zygote=$z butuh app_process32 (tidak ada di system donor) dan system donor juga tidak punya init.$want.rc -> zygote tidak bisa start (bootloop). Pakai donor lain"
+            if is_true "${SEPOLICY_STRICT:-false}"; then die "zygote tidak bisa start dengan system donor ini"; fi
+            return 0
+        fi
+        set_prop "$pp" ro.zygote "$want"
+        PROPS_PORT_FORCED+=" ro.zygote"
+        ok "zygote: ro.zygote $z (vendor) -> $want di product (system donor 64-bit only, tanpa app_process32; mencegah zygote gagal start / restart berulang)"
+        return 0
+    fi
+    if [[ -f $sys/etc/init/hw/init.$z.rc ]]; then
+        ok "zygote: ro.zygote=$z, system donor punya init.$z.rc$(is_true "$has32" && echo ' + app_process32')"
+    else
+        warn "zygote: system donor tidak punya /system/etc/init/hw/init.$z.rc (ro.zygote=$z) -> zygote tidak start (bootloop)"
+        if is_true "${SEPOLICY_STRICT:-false}"; then die "init.$z.rc tidak ada di system donor"; fi
+    fi
+}
+
 # service ROM donor yang bisa me-reboot HP kalau crash (critical = 4x crash dalam 4 menit ->
 # reboot ke bootloader; reboot_on_failure = langsung reboot). Service AOSP standar dikenal;
 # sisanya (biasanya khas device donor, mis. marble) dilaporkan supaya bootloop mudah dilacak.

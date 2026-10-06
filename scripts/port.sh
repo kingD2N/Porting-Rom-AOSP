@@ -812,6 +812,7 @@ props_effective() {
     if [[ -f $pp ]]; then
         for k in $(comm -23 <(printf '%s\n' "$allv") <(printf '%s\n' "$bk")); do
             [[ $k == ro.product.first_api_level || $k == ro.sf.lcd_density ]] && continue
+            in_list "$k" "${PROPS_PORT_FORCED:-}" && continue   # sengaja diisi port (mis. ro.zygote)
             if grep -q "^${k//./\\.}=" "$pp"; then
                 sed -i "/^${k//./\\.}=/d" "$pp"
                 log "props: $k dihapus dari product (ingres memakai nilai vendor/odm)"
@@ -1861,6 +1862,7 @@ main() {
     vintf_device_check
     if is_true "$LINKER_CHECK"; then linker_check; fi
     abi_check
+    zygote_check
     ims_check
     rc_reboot_check
 
