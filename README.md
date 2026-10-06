@@ -55,14 +55,36 @@ Donor GSI (satu `system.img`) tidak didukung di sini, flash GSI dengan cara bias
 
 ## Isi zip
 
+Input `package_type` memilih format (default `ota`).
+
+**`ota`** - seperti zip ROM AOSP/LineageOS biasa:
+
+```
+payload.bin                     full payload A/B (update_engine): boot, vendor_boot, dtbo, vbmeta,
+                                vbmeta_system + system/system_ext/product donor + vendor/odm/vendor_dlkm ingres
+payload_properties.txt          FILE_HASH / FILE_SIZE / METADATA_HASH / METADATA_SIZE
+apex_info.pb                    versi APEX di system donor
+META-INF/com/android/metadata   ota-type=AB, pre-device=ingres, post-timestamp, property-files
+META-INF/com/android/metadata.pb
+META-INF/com/android/otacert
+META-INF/port_info.txt          ringkasan build port
+```
+
+- Dibuat oleh `scripts/make_ota.py` (tanpa delta_generator): format v2, op `REPLACE_XZ`/`REPLACE` per 2 MiB, group dinamis & ukuran sama dengan payload ROM base, ditandatangani test-key AOSP (recovery memeriksa ada tidaknya tanda tangan, bukan kuncinya). Setelah dibuat, zip dicek ulang (hash, offset, metadata).
+- Recovery memasang payload ke **slot tidak aktif** lalu memindah slot; susunan super diatur update_engine dan status OTA lama dibatalkan otomatis.
+- `care_map.pb` tidak ada karena hanya dipakai untuk dm-verity, dan verity sengaja dimatikan di ROM port.
+- **recovery tidak ikut** di payload (kecuali `recovery_img_url` diisi). Pastikan OrangeFox terpasang di **kedua slot**, karena sesudah flash HP pindah slot.
+- Sebagian build OrangeFox/TWRP gagal memasang payload OTA (`kInstallDeviceOpenError` / error 7). Kalau itu terjadi, build ulang dengan `package_type: recovery`.
+
+**`recovery`** - installer shell (cara lama):
+
 ```
 META-INF/                       installer (cuma flash, tanpa wipe)
 images/*.img                    firmware + boot, vendor_boot, dtbo, vbmeta (slot A+B)
 images/super.img.zst            super (system/system_ext/product donor + vendor/odm ingres)
 ```
 
-- **recovery.img tidak ikut**, OrangeFox di HP tetap. (Kalau `vendor_boot` base ternyata membawa ramdisk recovery, log memberi warning.)
-- Zip ini **bukan** payload.bin, jadi tidak kena masalah OrangeFox yang gagal flash OTA AOSP (`kInstallDeviceOpenError`); isinya ditulis langsung pakai `dd`.
+- recovery.img tidak ikut, OrangeFox di HP tetap. Isi ditulis langsung pakai `dd`, slot aktif diset A, status OTA lama dibatalkan.
 - Perintah format/wipe di META-INF dinetralkan; kalau masih ada yang lolos, build sengaja gagal.
 
 ## Build
@@ -76,6 +98,7 @@ images/super.img.zst            super (system/system_ext/product donor + vendor/
 | `base_rom_url` | OTA ROM AOSP ingres (`.zip` payload.bin), atau fastboot MIUI/HyperOS ingres (`.tgz`), atau zip xiaomi.eu ingres |
 | `port_rom_url` | OTA ROM AOSP donor (`.zip` berisi `payload.bin`) |
 | `super_size` | `9126805504` (super ingres). Cek di HP: `su -c blockdev --getsize64 /dev/block/by-name/super` |
+| `package_type` | `ota` (default, zip payload.bin seperti ROM AOSP) atau `recovery` (images + super.img.zst, ditulis dd) |
 | `ext4_partitions` | `vendor odm system vendor_dlkm product system_ext` (bisa diedit langsung di HP). Kalau super tidak muat, partisi EXT4 terbesar otomatis jadi EROFS. `vendor_dlkm` dipakai apa adanya dari base (read-only) |
 | `debloat` | path/package tambahan, pisah spasi. Boleh kosong |
 | `copy_from_base` | path dari base yang ikut disalin, mis. `product/overlay/FooIngres.apk`. APK `sharedUserId=android.uid.system` dilewati (beda kunci platform). priv-app: allowlist izin base + semua izin yang diminta APK ditulis ulang (APK base bertanda tangan platform base, di donor izinnya lewat jalur privileged) |
@@ -102,9 +125,7 @@ Kalau gagal, buka step **Port ROM**. Tiap tahap punya header (0/7 sampai 7/7); b
 3. **Format Data** (Wipe -> Format Data -> ketik `yes`). Wajib di instalasi pertama.
 4. Reboot System. Boot pertama bisa sampai 10 menit (sepolicy di-compile di HP, dexopt).
 
-Slot aktif otomatis diset ke A (semua partisi logical diisi slot A).
-
-Status update Virtual A/B lama ikut dibatalkan (setara `fastboot snapshot-update cancel`): isi `/metadata/ota` dihapus (kunci enkripsi `/metadata/vold` tidak disentuh) dan `merge_status` pesan virtual A/B di `misc` direset ke NONE kalau masih menyimpan OTA yang belum selesai. Tanpa ini, OTA lama yang belum selesai merge bisa membuat init memetakan snapshot ke layout super lama -> bootloop.
+Zip `ota`: recovery memasang ke slot tidak aktif lalu pindah slot. Zip `recovery`: slot aktif otomatis diset ke A (semua partisi logical diisi slot A), dan status update Virtual A/B lama ikut dibatalkan (setara `fastboot snapshot-update cancel`): isi `/metadata/ota` dihapus (kunci enkripsi `/metadata/vold` tidak disentuh) dan `merge_status` pesan virtual A/B di `misc` direset ke NONE kalau masih menyimpan OTA yang belum selesai. Tanpa ini, OTA lama yang belum selesai merge bisa membuat init memetakan snapshot ke layout super lama -> bootloop.
 
 ## Kalau bootloop
 
@@ -158,6 +179,7 @@ File yang mau dipaksa ke versi ingres: taruh di `devices/ingres/<partisi>/...` (
 .github/workflows/port-aosp-ingres.yml   workflow utama
 scripts/port.sh                          proses port
 scripts/aosp_extras.sh                   overlay, updater, displayconfig, FCM, cek sepolicy/checkvintf/ABI/IMS
+scripts/make_ota.py                      bangun zip OTA A/B (payload.bin, payload_properties.txt, apex_info.pb, metadata)
 scripts/lp_tool.py                       metadata super & payload.bin
 scripts/lpunpack_compat.py               jalankan lpunpack.py toolkit di Python 3.13+
 scripts/fstab_patch.py                   patch fstab

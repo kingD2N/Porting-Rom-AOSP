@@ -1,4 +1,4 @@
-name: Port AOSP -> ingres (Recovery)
+name: Port AOSP -> ingres
 
 on:
   workflow_dispatch:
@@ -12,6 +12,14 @@ on:
         description: "URL OTA ROM AOSP donor (.zip berisi payload.bin). Ideal: device SM8450 (taro), basis sama dengan base"
         required: true
         type: string
+      package_type:
+        description: "Format zip: ota = payload.bin seperti ROM AOSP/LineageOS (flash di recovery) | recovery = images + super.img.zst (dd)"
+        required: false
+        default: ota
+        type: choice
+        options:
+          - ota
+          - recovery
       super_size:
         description: "Ukuran partisi super (byte). ingres = 9126805504. auto = baca dari ROM base"
         required: false
@@ -105,7 +113,8 @@ env:
   FIRST_API_LEVEL: auto        # ingres rilis Android 12 -> 31
   LCD_DENSITY: auto
   INSTALLER: auto              # auto | base (META-INF zip base, mis. xiaomi.eu) | ours
-  RECOVERY_SUPER: zst          # hanya INSTALLER=ours: zst (zip kecil) | raw
+  RECOVERY_SUPER: zst          # package_type recovery: zst (zip kecil) | raw
+  OTA_XZ_PRESET: "6"           # package_type ota: level xz payload (6 = AOSP; 3 = build ~2x lebih cepat, zip ~7% lebih besar)
   GBOARD_APK: ""               # opsional: URL Gboard -> keyboard sistem
   GBOARD_PACKAGE: com.google.android.inputmethod.latin
   DEBLOAT_PRESET: none
@@ -248,6 +257,7 @@ jobs:
           DEBLOAT: ${{ inputs.debloat }}
           COPY_FROM_BASE: ${{ inputs.copy_from_base }}
           BASE_EXTRAS: ${{ inputs.base_extras }}
+          PACKAGE_TYPE: ${{ inputs.package_type }}
           BOOT_IMG: ${{ inputs.boot_img_url }}
           DISABLE_ENCRYPTION: ${{ inputs.disable_encryption }}
           RW_MOUNT: ${{ inputs.rw_mount }}
@@ -348,6 +358,7 @@ jobs:
           RW_MOUNT: ${{ inputs.rw_mount }}
           DEBUG_ADB: ${{ inputs.debug_adb }}
           BOOT: ${{ inputs.boot_img_url }}
+          PKG: ${{ inputs.package_type }}
         run: |
           {
             echo "## Port AOSP -> ${TARGET_DEVICE}"
@@ -363,7 +374,7 @@ jobs:
             echo "| Encryption off | ${DISABLE_ENCRYPTION} |"
             echo "| RW | ${RW_MOUNT} |"
             echo "| Debug ADB | ${DEBUG_ADB} |"
-            echo "| Installer | ${INSTALLER} |"
+            echo "| Paket | ${PKG:-ota} |"
             if [ -n "${GDRIVE_LINK:-}" ]; then echo "| Google Drive | ${GDRIVE_LINK} |"; fi
             if ls out/*.sha256 >/dev/null 2>&1; then
               echo

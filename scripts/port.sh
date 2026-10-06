@@ -63,7 +63,11 @@ PROP_MERGE=${PROP_MERGE:-true}             # salin props hardware (allowlist) da
 # props base yang boleh disalin ke product donor (regex, dipisah spasi). Props ROM base (ro.lineage.*, ro.miui.*) tidak ikut.
 PROP_MERGE_ALLOW=${PROP_MERGE_ALLOW:-'ro\.sf\.lcd_density ro\.surface_flinger\..* debug\.sf\..* persist\.sys\.sf\..* ro\.vendor\..* persist\.vendor\..* vendor\..* ro\.hardware\..* ro\.opengles\.version ro\.hwui\..* ro\.config\..*_vol_steps ro\.charger\..* bluetooth\..* persist\.bluetooth\..* ro\.bluetooth\..* ro\.telephony\.default_network persist\.radio\..* ro\.audio\..* audio\..* persist\.audio\..* dalvik\.vm\.heap.* ro\.media\..* media\..*'}
 OVERLAY_FIX=${OVERLAY_FIX:-true}           # buang overlay khas donor, salin overlay khas ingres
-INSTALLER=${INSTALLER:-auto}                # auto | base (META-INF dari ROM base, mis. xiaomi.eu) | ours
+# ota      = zip OTA A/B gaya AOSP/LineageOS: payload.bin + payload_properties.txt + META-INF/com/android
+#            (dipasang update_engine recovery ke slot tidak aktif, layout super diurus update_engine)
+# recovery = zip installer shell: images/super.img(.zst) ditulis dd ke partisi super (cara lama)
+PACKAGE_TYPE=${PACKAGE_TYPE:-ota}
+INSTALLER=${INSTALLER:-auto}                # auto | base (META-INF dari ROM base, mis. xiaomi.eu) | ours (PACKAGE_TYPE=recovery)
 RECOVERY_SUPER=${RECOVERY_SUPER:-zst}      # hanya INSTALLER=ours: raw = images/super.img | zst = images/super.img.zst
 RECOVERY_IMG=${RECOVERY_IMG:-}              # opsional: URL/path recovery.img custom (OrangeFox dll)
 BOOT_IMG=${BOOT_IMG:-}                      # opsional: URL/path boot.img custom (kernel), menggantikan boot.img base
@@ -1608,9 +1612,105 @@ write_recovery_pkg() {
     log "recovery : $( [[ $flash_rec == true ]] && echo "diganti (RECOVERY_IMG)" || echo "tidak di-flash (recovery HP dipertahankan)")"
 }
 
+# ================================================================== OTA A/B
+# Data yang hanya ada sebelum folder port dihapus (tahap 5): apex_info.pb + identitas build.
+ota_prepare() {
+    local d dirs=() bp="$P_FS/system/system/build.prop"
+    for d in "$P_FS/system/system/apex" "$P_FS/system_ext/apex" "$P_FS/product/apex"; do
+        if [[ -d $d ]]; then dirs+=("$d"); fi
+    done
+    if [[ ${#dirs[@]} -gt 0 ]]; then
+        python3 "$SCRIPT_DIR/make_ota.py" apex-info --out "$WORK/apex_info.pb" "${dirs[@]}" | sed 's/^/  /' || rm -f "$WORK/apex_info.pb"
+    fi
+    OTA_FINGERPRINT=$(get_prop "$bp" ro.system.build.fingerprint)
+    OTA_FINGERPRINT=${OTA_FINGERPRINT:-$(get_prop "$bp" ro.build.fingerprint)}
+    OTA_INCREMENTAL=$(get_prop "$bp" ro.build.version.incremental)
+    OTA_SPL=$(get_prop "$bp" ro.build.version.security_patch)
+    OTA_SDK=$(get_prop "$bp" ro.build.version.sdk)
+    log "OTA: fingerprint ${OTA_FINGERPRINT:-?}, SPL ${OTA_SPL:-?}, SDK ${OTA_SDK:-?}"
+}
+
+ota_info_file() { # file port_ver port_name donor btype
+    {
+        echo "device=$TARGET_DEVICE"; echo "donor=$4"; echo "rom=$3"; echo "port_version=$2"
+        echo "base_type=$5"; echo "port_partitions=$PORT_PARTITIONS"; echo "ext4_partitions=$EXT4_PARTITIONS"
+        echo "disable_encryption=$DISABLE_ENCRYPTION"; echo "rw_mount=$RW_MOUNT"
+        echo "disable_avb=$DISABLE_AVB"; echo "debug_adb=$DEBUG_ADB"; echo "package_type=$PACKAGE_TYPE"
+        echo "boot_img=${BOOT_IMG:-base}"; echo "anti_ver=${ANTI_VER:-unknown}"; echo "build_date=$(date +%Y%m%d)"
+    } > "$1"
+}
+
+package_ota() { # "partisi logical" name port_ver port_name donor btype
+    local logical_parts=$1 name=$2 imgd="$WORK/ota_images" args=() f p dyn="" gname gsize kd="$WORK/aosp_testkey"
+    prune_base_images
+    mkdir -p "$imgd"
+    mv "$B_IMG"/* "$imgd/" 2>/dev/null || true
+    rm -f "$imgd/super.img"
+    if [[ -n $RECOVERY_IMG ]]; then
+        cp -f "$(fetch "$RECOVERY_IMG" "$WORK/dl" recovery_custom.img)" "$imgd/recovery.img"
+        ok "recovery.img diganti: $(basename "$RECOVERY_IMG")"
+    else
+        rm -f "$imgd/recovery.img"
+        log "recovery tidak dimasukkan ke payload (recovery di HP tidak ditimpa)"
+    fi
+    if [[ -n $BOOT_IMG ]]; then replace_boot "$imgd/boot.img"; fi
+    if [[ -n ${ANTI_VER:-} ]]; then
+        warn "ROM base membawa firmware (anti-rollback $ANTI_VER) yang ikut di payload: pastikan 'fastboot getvar anti' HP <= $ANTI_VER"
+    fi
+
+    # partisi non-dinamis (boot, vendor_boot, dtbo, vbmeta, firmware) + partisi logical
+    for f in "$imgd"/*.img; do
+        [[ -f $f ]] || continue
+        p=$(basename "$f" .img)
+        case $p in
+            cust|rescue|persist*|misc|userdata|metadata|cache|super)
+                warn "OTA: $p bukan partisi A/B, tidak bisa masuk payload (dilewati)"; continue ;;
+        esac
+        args+=(--partition "$p=$f")
+    done
+    for p in $logical_parts; do
+        f="$OUT_IMG_TMP/$p.img"
+        [[ -f $f ]] || continue
+        args+=(--partition "$p=$f")
+        dyn+="${dyn:+,}$p"
+    done
+    [[ -n $dyn ]] || die "OTA: tidak ada partisi logical"
+
+    resolve_super
+    gname=$SUPER_GROUP; gsize=$SUPER_GMAX
+    if [[ -n ${PAYLOAD_DYN_GROUPS:-} ]]; then
+        # ukuran group persis seperti payload ROM base (update_engine membandingkan dengan super HP)
+        gsize=${PAYLOAD_DYN_GROUPS%% *}; gsize=${gsize##*:}
+    fi
+    log "OTA: group $gname ($gsize byte): ${dyn//,/ }"
+
+    aosp_key testkey "$AOSP_TESTKEY_SHA256" || die "test-key AOSP untuk tanda tangan payload tidak bisa diunduh"
+    openssl pkcs8 -inform DER -nocrypt -in "$kd/testkey.pk8" -out "$kd/testkey.pem" 2>/dev/null \
+        || die "konversi testkey.pk8 gagal"
+    ota_info_file "$WORK/port_info.txt" "$3" "$4" "$5" "$6"
+
+    local extra=(--extra "META-INF/port_info.txt=$WORK/port_info.txt")
+    if [[ -s $WORK/apex_info.pb ]]; then extra+=(--apex-info "$WORK/apex_info.pb"); fi
+    python3 "$SCRIPT_DIR/make_ota.py" build --out "$OUT/$name.zip" \
+        --key "$kd/testkey.pem" --cert "$kd/testkey.x509.pem" \
+        "${args[@]}" --group "$gname:$gsize:$dyn" --device "$TARGET_DEVICE" \
+        --snapshot "${PAYLOAD_SNAPSHOT:-${LP_VIRTUAL_AB:-1}}" --vabc 0 \
+        --fingerprint "${OTA_FINGERPRINT:-}" --incremental "${OTA_INCREMENTAL:-}" \
+        --spl "${OTA_SPL:-}" --sdk "${OTA_SDK:-}" --xz-preset "${OTA_XZ_PRESET:-6}" \
+        --tmpdir "$WORK" "${extra[@]}" || die "pembuatan OTA gagal"
+    rm -rf "$imgd" "$OUT_IMG_TMP"
+    (cd "$OUT" && sha256sum "$name.zip" > "$name.zip.sha256")
+    ok "SELESAI: $OUT/$name.zip ($(du -h "$OUT/$name.zip" | cut -f1)) - OTA A/B: flash di recovery, lalu Format Data"
+    if [[ -n ${GITHUB_OUTPUT:-} ]]; then
+        { echo "zip=$OUT/$name.zip"; echo "name=$name"; echo "port_version=$3"; echo "donor=$5"; echo "rom=$4"; echo "base_type=$6"; } >> "$GITHUB_OUTPUT"
+    fi
+}
+
 # ================================================================== MAIN
 main() {
     [[ $RECOVERY_SUPER == raw || $RECOVERY_SUPER == zst ]] || die "RECOVERY_SUPER harus raw atau zst"
+    [[ $PACKAGE_TYPE == ota || $PACKAGE_TYPE == recovery ]] || die "PACKAGE_TYPE harus ota atau recovery, bukan '$PACKAGE_TYPE'"
+    if [[ $PACKAGE_TYPE == ota ]]; then need openssl; fi
     need curl python3 unzip zip zstd tar lz4 gettype extract.erofs mkfs.erofs mke2fs e2fsdroid \
          resize2fs lpmake simg2img magiskboot payload-dumper-go
     rm -rf "$WORK" "$OUT"
@@ -1762,6 +1862,7 @@ main() {
     patch_vendor_boot
     vendor_boot_recovery_warn
     patch_vbmeta
+    if [[ $PACKAGE_TYPE == ota ]]; then ota_prepare; fi
     group_end
 
     # ---------------- 5. REPACK
@@ -1800,11 +1901,22 @@ main() {
     group_end
 
     # ---------------- 6. SUPER
-    group_start "6/7 Build super.img"
     local super_list
     # shellcheck disable=SC2086  # daftar sengaja di-split
     super_list=$(printf '%s\n' $logical $PORT_PARTITIONS | awk '!s[$0]++' | tr '\n' ' ')
-    local pkg="$OUT/pkg" mode
+    local pkg="$OUT/pkg" mode stamp name
+    stamp=$(date +%Y%m%d)
+    name="${port_name}_${port_ver}_${TARGET_DEVICE}_port_${stamp}"
+    if [[ $PACKAGE_TYPE == ota ]]; then
+        group_start "6/7 Partisi logical -> payload"
+        log "PACKAGE_TYPE=ota: super.img tidak dibuat, partisi logical masuk payload.bin (update_engine yang menyusun super)"
+        group_end
+        group_start "7/7 Paket OTA A/B (payload.bin)"
+        package_ota "$super_list" "$name" "$port_ver" "$port_name" "$donor" "$btype"
+        group_end
+        return 0
+    fi
+    group_start "6/7 Build super.img"
     mkdir -p "$pkg/images"
     mode=$(installer_mode)
     log "installer: $mode"
@@ -1841,9 +1953,6 @@ main() {
         write_recovery_pkg "$pkg" "$port_ver" "$port_name"
     fi
     installer_no_wipe "$pkg"
-    local stamp name
-    stamp=$(date +%Y%m%d)
-    name="${port_name}_${port_ver}_${TARGET_DEVICE}_port_${stamp}"
     {
         echo "device=$TARGET_DEVICE"; echo "donor=$donor"; echo "rom=$port_name"; echo "port_version=$port_ver"
         echo "base_type=$btype"; echo "port_partitions=$PORT_PARTITIONS"; echo "ext4_partitions=$EXT4_PARTITIONS"

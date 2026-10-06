@@ -293,8 +293,31 @@ replace_donor_camera() {
 AOSP_TESTKEY_PLATFORM_SHA256=c8a2e9bccf597c2fb6dc66bee293fc13f2fc47ec77bc6b2b0d52c11f51192ab8
 AOSP_TESTKEY_URLS="https://raw.githubusercontent.com/aosp-mirror/platform_build/main/target/product/security https://android.googlesource.com/platform/build/+/refs/heads/main/target/product/security"
 DONOR_PLATFORM_CERT=""
+# shellcheck disable=SC2034  # dipakai port.sh (package_ota)
+AOSP_TESTKEY_SHA256=a40da80a59d170caa950cf15c18c454d47a39b26989d8b640ecd745ba71bf5dc
+# unduh <nama>.pk8 + <nama>.x509.pem test-key AOSP ke $WORK/aosp_testkey, sertifikat dicek SHA-256
+aosp_key() { # <nama> <sha256 sertifikat>
+    local name=$1 want=$2 kd="$WORK/aosp_testkey" u f got
+    if [[ -s $kd/$name.pk8 ]]; then return 0; fi
+    mkdir -p "$kd"
+    for u in $AOSP_TESTKEY_URLS; do
+        for f in "$name.pk8" "$name.x509.pem"; do
+            if [[ $u == *googlesource* ]]; then
+                curl -fsSL --retry 2 "$u/$f?format=TEXT" | base64 -d > "$kd/$f" 2>/dev/null || true
+            else
+                curl -fsSL --retry 2 -o "$kd/$f" "$u/$f" || true
+            fi
+        done
+        got=$(openssl x509 -in "$kd/$name.x509.pem" -noout -fingerprint -sha256 2>/dev/null \
+            | sed 's/.*=//; s/://g' | tr 'A-F' 'a-f' || true)
+        if [[ $got == "$want" && -s $kd/$name.pk8 ]]; then return 0; fi
+        rm -f "$kd/$name.pk8" "$kd/$name.x509.pem"
+    done
+    warn "test-key AOSP $name gagal diunduh / sertifikat tidak cocok"
+    return 1
+}
 platform_resign() { # <dir app>; 0 = APK sudah ditandatangani ulang dengan kunci platform donor
-    local dir=$1 apk kd="$WORK/aosp_testkey" u f got
+    local dir=$1 apk kd="$WORK/aosp_testkey"
     apk=$(find "$dir" -maxdepth 1 -name '*.apk' | head -n1)
     [[ -n $apk ]] || return 1
     if ! command -v apksigner >/dev/null; then DONOR_PLATFORM_CERT="apksigner tidak ada"; return 1; fi
@@ -305,23 +328,7 @@ platform_resign() { # <dir app>; 0 = APK sudah ditandatangani ulang dengan kunci
         log "kunci platform donor: $DONOR_PLATFORM_CERT"
     fi
     [[ $DONOR_PLATFORM_CERT == "$AOSP_TESTKEY_PLATFORM_SHA256" ]] || return 1
-    if [[ ! -s $kd/platform.pk8 ]]; then
-        mkdir -p "$kd"
-        for u in $AOSP_TESTKEY_URLS; do
-            for f in platform.pk8 platform.x509.pem; do
-                if [[ $u == *googlesource* ]]; then
-                    curl -fsSL --retry 2 "$u/$f?format=TEXT" | base64 -d > "$kd/$f" 2>/dev/null || true
-                else
-                    curl -fsSL --retry 2 -o "$kd/$f" "$u/$f" || true
-                fi
-            done
-            got=$(openssl x509 -in "$kd/platform.x509.pem" -noout -fingerprint -sha256 2>/dev/null \
-                | sed 's/.*=//; s/://g' | tr 'A-F' 'a-f' || true)
-            if [[ $got == "$AOSP_TESTKEY_PLATFORM_SHA256" && -s $kd/platform.pk8 ]]; then break; fi
-            rm -f "$kd/platform.pk8" "$kd/platform.x509.pem"
-        done
-        if [[ ! -s $kd/platform.pk8 ]]; then warn "test-key AOSP gagal diunduh / tidak cocok"; return 1; fi
-    fi
+    aosp_key platform "$AOSP_TESTKEY_PLATFORM_SHA256" || return 1
     if ! apksigner sign --key "$kd/platform.pk8" --cert "$kd/platform.x509.pem" --out "$apk.signed" "$apk" >/dev/null 2>"$WORK/apksigner.log"; then
         warn "apksigner gagal: $(head -n1 "$WORK/apksigner.log")"; rm -f "$apk.signed"; return 1
     fi
