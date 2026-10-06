@@ -181,7 +181,7 @@ addon_remove_pkgs() { # label pkg...
 
 # ------------------------------------------------------------------ MiuiCamera
 addon_miuicamera() {
-    local d="$WORK/addons/miuicamera" sys="$P_FS/system/system" ven apk st oid size got lib rc url f pkg n
+    local d="$WORK/addons/miuicamera" sys="$P_FS/system/system" ven apk st oid size lfs_info got lib rc url f pkg n
     ADDON_CUR=miuicamera
     log "addon MiuiCamera: sumber $MIUICAMERA_VENDOR_REPO ($MIUICAMERA_BRANCH)"
     if [[ ! -d $sys ]]; then warn "addon MiuiCamera: system donor tidak diekstrak"; return 1; fi
@@ -193,7 +193,9 @@ addon_miuicamera() {
     apk="$ven/priv-app/MiuiCamera/MiuiCamera.apk"
     [[ -f $apk ]] || { warn "addon MiuiCamera: MiuiCamera.apk tidak ada di repo vendor"; return 1; }
     # APK disimpan di git LFS (~200 MB): unduh isi aslinya, cek sha256 sesuai pointer
-    read -r oid size < <(python3 "$SCRIPT_DIR/addon_tool.py" lfs "$apk"; echo) || true
+    oid=""; size=""
+    lfs_info=$(python3 "$SCRIPT_DIR/addon_tool.py" lfs "$apk" || true)
+    if [[ -n $lfs_info ]]; then read -r oid size <<< "$lfs_info"; fi
     if [[ -n ${oid:-} ]]; then
         url="https://media.githubusercontent.com/media/${MIUICAMERA_VENDOR_REPO#https://github.com/}/$MIUICAMERA_BRANCH/proprietary/system/priv-app/MiuiCamera/MiuiCamera.apk"
         log "  unduh MiuiCamera.apk ($(( size / 1048576 )) MB, git LFS)"
