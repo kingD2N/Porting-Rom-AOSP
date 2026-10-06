@@ -1612,6 +1612,22 @@ write_recovery_pkg() {
     log "recovery : $( [[ $flash_rec == true ]] && echo "diganti (RECOVERY_IMG)" || echo "tidak di-flash (recovery HP dipertahankan)")"
 }
 
+# recovery.img custom (TWRP/OrangeFox) menggantikan recovery base. Dicek: image boot Android
+# (magic ANDROID!) dan tidak lebih besar dari partisi recovery (= recovery.img base).
+put_recovery() { # dest (berisi recovery.img base kalau ada)
+    local dest=$1 rec magic sz max=""
+    rec=$(fetch "$RECOVERY_IMG" "$WORK/dl" recovery_custom.img)
+    magic=$(head -c 8 "$rec" | tr -d '\0')
+    [[ $magic == "ANDROID!" ]] || die "recovery custom bukan image boot Android (magic '$magic'): $RECOVERY_IMG"
+    sz=$(stat -c%s "$rec")
+    if [[ -f $dest ]]; then max=$(stat -c%s "$dest"); fi
+    if [[ -n $max ]] && (( sz > max )); then
+        die "recovery custom ($sz byte) lebih besar dari partisi recovery ($max byte)"
+    fi
+    cp -f "$rec" "$dest"
+    ok "recovery diganti: $(basename "$RECOVERY_IMG") ($(( sz / 1048576 )) MB, header v$(od -An -tu4 -j40 -N4 "$rec" | tr -d ' '))"
+}
+
 # ================================================================== OTA A/B
 # Data yang hanya ada sebelum folder port dihapus (tahap 5): apex_info.pb + identitas build.
 ota_prepare() {
@@ -1647,8 +1663,8 @@ package_ota() { # "partisi logical" name port_ver port_name donor btype
     mv "$B_IMG"/* "$imgd/" 2>/dev/null || true
     rm -f "$imgd/super.img"
     if [[ -n $RECOVERY_IMG ]]; then
-        cp -f "$(fetch "$RECOVERY_IMG" "$WORK/dl" recovery_custom.img)" "$imgd/recovery.img"
-        ok "recovery.img diganti: $(basename "$RECOVERY_IMG")"
+        put_recovery "$imgd/recovery.img"
+        log "recovery custom ikut di payload -> ditulis ke slot tujuan OTA"
     else
         rm -f "$imgd/recovery.img"
         log "recovery tidak dimasukkan ke payload (recovery di HP tidak ditimpa)"
@@ -1930,10 +1946,7 @@ main() {
     prune_base_images
     mv "$B_IMG"/* "$pkg/images/" 2>/dev/null || true
     if [[ -n $RECOVERY_IMG ]]; then
-        local rec
-        rec=$(fetch "$RECOVERY_IMG" "$WORK/dl" recovery_custom.img)
-        cp -f "$rec" "$pkg/images/recovery.img"
-        ok "recovery.img diganti: $(basename "$RECOVERY_IMG")"
+        put_recovery "$pkg/images/recovery.img"
     fi
     if [[ -n $BOOT_IMG ]]; then replace_boot "$pkg/images/boot.img"; fi
     if [[ -z $RECOVERY_IMG ]]; then

@@ -71,9 +71,9 @@ on:
         default: true
         type: boolean
       recovery_img_url:
-        description: "Opsional: URL recovery.img custom (OrangeFox). Kosong = recovery HP tidak disentuh"
+        description: "URL recovery.img custom (default: TWRP D2N). Kosongkan = recovery HP tidak disentuh"
         required: false
-        default: ""
+        default: "https://github.com/kingD2N/ALL-PROJECT-D2N/releases/download/ingres/TWRP_PROJECT_recovery_A16_A17_.img"
         type: string
       release_repo:
         description: "owner/repo untuk GitHub Release (kosong = upload artifact)"

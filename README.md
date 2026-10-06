@@ -73,7 +73,7 @@ META-INF/port_info.txt          ringkasan build port
 - Dibuat oleh `scripts/make_ota.py` (tanpa delta_generator): format v2, op `REPLACE_XZ`/`REPLACE` per 2 MiB, group dinamis & ukuran sama dengan payload ROM base, ditandatangani test-key AOSP (recovery memeriksa ada tidaknya tanda tangan, bukan kuncinya). Setelah dibuat, zip dicek ulang (hash, offset, metadata).
 - Recovery memasang payload ke **slot tidak aktif** lalu memindah slot; susunan super diatur update_engine dan status OTA lama dibatalkan otomatis.
 - `care_map.pb` tidak ada karena hanya dipakai untuk dm-verity, dan verity sengaja dimatikan di ROM port.
-- **recovery tidak ikut** di payload (kecuali `recovery_img_url` diisi). Pastikan OrangeFox terpasang di **kedua slot**, karena sesudah flash HP pindah slot.
+- **recovery**: default TWRP D2N ikut di payload dan ditulis ke slot tujuan, jadi sesudah pindah slot HP tetap punya TWRP. Kalau `recovery_img_url` dikosongkan, recovery tidak ikut; pastikan recovery custom terpasang di **kedua slot**.
 - Sebagian build OrangeFox/TWRP gagal memasang payload OTA (`kInstallDeviceOpenError` / error 7). Kalau itu terjadi, build ulang dengan `package_type: recovery`.
 
 **`recovery`** - installer shell (cara lama):
@@ -84,7 +84,7 @@ images/*.img                    firmware + boot, vendor_boot, dtbo, vbmeta (slot
 images/super.img.zst            super (system/system_ext/product donor + vendor/odm ingres)
 ```
 
-- recovery.img tidak ikut, OrangeFox di HP tetap. Isi ditulis langsung pakai `dd`, slot aktif diset A, status OTA lama dibatalkan.
+- recovery: TWRP D2N (default `recovery_img_url`) ditulis ke slot A dan B; kosongkan input itu untuk mempertahankan recovery di HP. Isi ditulis langsung pakai `dd`, slot aktif diset A, status OTA lama dibatalkan.
 - Perintah format/wipe di META-INF dinetralkan; kalau masih ada yang lolos, build sengaja gagal.
 
 ## Build
@@ -108,7 +108,7 @@ images/super.img.zst            super (system/system_ext/product donor + vendor/
 | `rw_mount` | `true` (hanya partisi EXT4 yang dibangun ulang: system, system_ext, product, vendor, odm. `vendor_dlkm` dari base tetap read-only) |
 | `debug_adb` | `true` selama testing (adb hidup sejak boot) |
 | `sepolicy_strict` | `true` (default) = build gagal kalau sepolicy gabungan error (pasti bootloop); `false` = cuma warning |
-| `recovery_img_url` | kosongkan |
+| `recovery_img_url` | default TWRP D2N (`ALL-PROJECT-D2N` release `ingres`, `TWRP_PROJECT_recovery_A16_A17_.img`). Dicek: image boot Android dan tidak lebih besar dari partisi recovery. Kosongkan = recovery HP tidak disentuh |
 | `release_repo` | kosong = Artifacts. `owner/repo` = GitHub Release (secret `RELEASE_TOKEN`) |
 | `gdrive_upload` | `true` = upload juga ke Google Drive lewat rclone (secret `RCLONE_CONFIG` = isi `rclone.conf`, folder di env `GDRIVE_REMOTE`) |
 
