@@ -53,6 +53,46 @@ write_super() {
     return 0
 }
 
+# Status update Virtual A/B lama (OTA yang belum selesai merge / dipasang lewat recovery):
+# /metadata/ota berisi daftar snapshot (COW) yang menunjuk ke layout super LAMA. Kalau dibiarkan,
+# first-stage init mencoba memetakan snapshot itu di atas super baru -> mount gagal -> bootloop.
+# Sama seperti 'fastboot snapshot-update cancel': hapus /metadata/ota (BUKAN /metadata/vold) dan
+# set merge_status pesan virtual A/B di misc (offset 32 KiB) ke NONE.
+clear_vab_state() {
+    md=""; mounted_here=""
+    if grep -q " /metadata " /proc/mounts 2>/dev/null; then
+        md=/metadata
+    elif [ -e "$BLK/metadata" ]; then
+        mkdir -p "$TMPD/metadata"
+        if mount -t ext4 "$BLK/metadata" "$TMPD/metadata" 2>/dev/null \
+            || mount -t f2fs "$BLK/metadata" "$TMPD/metadata" 2>/dev/null; then
+            md="$TMPD/metadata"; mounted_here=1
+        fi
+    fi
+    if [ -n "$md" ]; then
+        if [ -d "$md/ota" ] && [ -n "$(ls -A "$md/ota" 2>/dev/null)" ]; then
+            rm -rf "$md/ota/"* 2>/dev/null
+            ui_print "- Status OTA/snapshot lama dihapus (/metadata/ota)"
+        fi
+        [ -n "$mounted_here" ] && umount "$md" 2>/dev/null
+    else
+        ui_print "! /metadata tidak bisa dibuka, status snapshot lama tidak dicek"
+    fi
+    [ -e "$BLK/misc" ] || return 0
+    vab=$(dd if="$BLK/misc" bs=1 skip=32768 count=6 2>/dev/null | od -An -tx1 | tr -d ' \n')
+    # versi(1) magic 0x56740AB0 LE(4) merge_status(1)
+    case "$vab" in
+        ??b00a7456??)
+            st=${vab#??b00a7456}
+            if [ "$st" != "00" ]; then
+                printf '\000' | dd of="$BLK/misc" bs=1 seek=32773 count=1 conv=notrunc 2>/dev/null \
+                    && ui_print "- Status merge Virtual A/B di misc direset ($st -> 00)"
+            fi
+            ;;
+    esac
+    return 0
+}
+
 # ------------------------------------------------------------------ mulai
 mkdir -p "$TMPD"
 ui_print " "
@@ -134,6 +174,7 @@ done
 # ---- super
 ui_print "- Flash super (lama, jangan dicabut)..."
 write_super
+clear_vab_state
 progress 0.95
 
 # ---- remap partisi logical supaya recovery melihat layout baru

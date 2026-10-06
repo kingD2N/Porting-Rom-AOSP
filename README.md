@@ -104,6 +104,8 @@ Kalau gagal, buka step **Port ROM**. Tiap tahap punya header (0/7 sampai 7/7); b
 
 Slot aktif otomatis diset ke A (semua partisi logical diisi slot A).
 
+Status update Virtual A/B lama ikut dibatalkan (setara `fastboot snapshot-update cancel`): isi `/metadata/ota` dihapus (kunci enkripsi `/metadata/vold` tidak disentuh) dan `merge_status` pesan virtual A/B di `misc` direset ke NONE kalau masih menyimpan OTA yang belum selesai. Tanpa ini, OTA lama yang belum selesai merge bisa membuat init memetakan snapshot ke layout super lama -> bootloop.
+
 ## Kalau bootloop
 
 Dengan `debug_adb` aktif, adb hidup sejak awal boot:
