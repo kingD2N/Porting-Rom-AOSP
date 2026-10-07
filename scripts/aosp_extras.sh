@@ -476,6 +476,26 @@ abi_check() {
 #   - rc ada        -> zygote_secondary gagal terus, "onrestart restart zygote" -> system_server restart terus
 # Product dimuat terakhir oleh init -> ro.zygote ditimpa di product sesuai kemampuan system donor.
 PROPS_PORT_FORCED=""   # props yang sengaja diisi port di product (tidak dibuang props_effective)
+# rc system yang meng-import file per-zygote (mis. mediaserver_dynamic.rc ->
+# hw/mediaserver.${ro.zygote}.rc, init.boringssl.${ro.zygote}.rc): file tujuannya harus ada,
+# kalau tidak service-nya (mediaserver = media.player/media.resource_manager) tidak pernah dibuat
+zygote_imports() { # nilai ro.zygote yang akan berlaku
+    local z=$1 sys="$P_FS/system/system" f line tgt rel n=0 miss=0
+    while IFS= read -r -d '' f; do
+        while IFS= read -r line; do
+            tgt=$(sed -E 's/^[[:space:]]*import[[:space:]]+//; s/[[:space:]]+$//' <<< "$line")
+            tgt=${tgt//\$\{ro.zygote\}/$z}
+            case $tgt in /system/*) rel=${tgt#/system/} ;; *) continue ;; esac
+            n=$((n + 1))
+            if [[ ! -f $sys/$rel ]]; then
+                miss=$((miss + 1))
+                warn "zygote: ${f#"$sys"/} meng-import $tgt (ro.zygote=$z) tapi file itu tidak ada di system donor -> service di dalamnya tidak pernah dibuat (mis. mediaserver: kamera/video/media rusak)"
+            fi
+        done < <(grep -E '^[[:space:]]*import[[:space:]].*\$\{ro\.zygote\}' "$f" || true)
+    done < <(find "$sys/etc/init" -name '*.rc' -print0 2>/dev/null)
+    if [[ $n -gt 0 && $miss -eq 0 ]]; then ok "zygote: $n import rc per-zygote (ro.zygote=$z) semua ada"; fi
+    return 0
+}
 zygote_check() {
     local sys="$P_FS/system/system" pp="$P_FS/product/etc/build.prop" z="" f v want has32=false
     for f in "$sys/build.prop" "$P_FS/system_ext/etc/build.prop" "$B_FS/vendor/default.prop" \
@@ -486,6 +506,7 @@ zygote_check() {
     if [[ -e $sys/bin/app_process32 ]]; then has32=true; fi
     want=$z
     if ! is_true "$has32" && [[ $z == *32* ]]; then want=zygote64; fi
+    zygote_imports "$want"
     if [[ $want != "$z" ]]; then
         if [[ ! -f $sys/etc/init/hw/init.$want.rc ]]; then
             warn "zygote: ro.zygote=$z butuh app_process32 (tidak ada di system donor) dan system donor juga tidak punya init.$want.rc -> zygote tidak bisa start (bootloop). Pakai donor lain"
