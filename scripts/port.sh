@@ -891,7 +891,9 @@ base_privapp_perms() { # <rel dir app di base, mis. product/priv-app/MiuiCamera>
     local rel=$1 part apk pkg out n
     [[ $rel == */priv-app/* ]] || return 0
     part=${rel%%/*}
-    apk=$(find "$B_FS/$rel" -maxdepth 1 -name '*.apk' | head -n1)
+    # APK yang benar-benar dipasang (hasil salinan di port, bisa sudah di-patch: GameKeys + REAL_GET_TASKS)
+    apk=$(find "$P_FS/$rel" -maxdepth 1 -name '*.apk' 2>/dev/null | head -n1)
+    [[ -n $apk ]] || apk=$(find "$B_FS/$rel" -maxdepth 1 -name '*.apk' | head -n1)
     [[ -n $apk ]] || return 0
     pkg=$(python3 "$SCRIPT_DIR/apk_index.py" --apk "$apk" || true)
     if [[ -z $pkg ]]; then warn "privapp: package $(basename "$apk") tidak terbaca, allowlist tidak disalin"; return 0; fi

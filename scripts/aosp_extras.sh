@@ -242,9 +242,13 @@ copy_from_base() {
             if platform_resign "$dst"; then
                 ok "$hpkg: ditandatangani ulang dengan kunci platform donor (test-key AOSP) -> platform_app"
             elif [[ $hpkg == org.lineageos.gamekeys ]]; then
-                rm -rf "$dst"
-                warn "GameKeys (tombol bahu) TIDAK disalin: butuh izin MANAGE_ACTIVITY_TASKS (signature) = kunci platform ROM donor, sedangkan donor ditandatangani kunci privat ($DONOR_PLATFORM_CERT). Tanpa itu app crash berulang"
-                continue
+                if gamekeys_patch "$dst"; then
+                    ok "GameKeys: donor kunci privat -> APK di-patch (deteksi app aktif lewat REAL_GET_TASKS, bukan TaskStackListener) dan ditandatangani testkey -> priv_app"
+                else
+                    rm -rf "$dst"
+                    warn "GameKeys (tombol bahu) TIDAK disalin: donor ditandatangani kunci privat ($DONOR_PLATFORM_CERT) dan patch APK gagal (lihat pesan di atas). Tanpa patch app crash berulang"
+                    continue
+                fi
             fi
             hal_apps+=("$hpkg")
         fi
@@ -335,6 +339,85 @@ platform_resign() { # <dir app>; 0 = APK sudah ditandatangani ulang dengan kunci
     fi
     mv "$apk.signed" "$apk"; rm -f "$apk.signed.idsig"
     chmod 644 "$apk"
+    return 0
+}
+
+# GameKeys LineageOS memanggil ActivityTaskManager.registerTaskStackListener (MANAGE_ACTIVITY_TASKS,
+# signature) di EventListenerService.onCreate tanpa try/catch -> tanpa kunci platform donor crash berulang.
+# Patch (apktool): panggilan register/unregister diarahkan ke PortTaskCompat (patches/gamekeys): coba
+# register biasa, kalau SecurityException -> thread yang tiap 700 ms membaca app teratas lewat
+# getTasks(1, true) dan memanggil listener.onTaskMovedToFront() (pengaturan tombol per app tetap jalan).
+# Manifest ditambah REAL_GET_TASKS (privileged -> allowlist). Resource asli tidak disentuh: hanya
+# classes.dex + AndroidManifest.xml dari hasil build yang dipakai (ID resource dicek sama).
+APKTOOL_URL=${APKTOOL_URL:-https://github.com/iBotPeaches/Apktool/releases/download/v2.12.1/apktool_2.12.1.jar}
+APKTOOL_SHA256=${APKTOOL_SHA256:-66cf4524a4a45a7f56567d08b2c9b6ec237bcdd78cee69fd4a59c8a0243aeafa}
+apktool_jar() { # -> path jar (diunduh sekali, sha256 dicek)
+    local j="$WORK/tools/apktool.jar"
+    if [[ ! -s $j ]]; then
+        mkdir -p "$WORK/tools"
+        curl -fsSL --retry 3 -o "$j.tmp" "$APKTOOL_URL" || { rm -f "$j.tmp"; return 1; }
+        if [[ $(sha256sum "$j.tmp" | cut -d' ' -f1) != "$APKTOOL_SHA256" ]]; then rm -f "$j.tmp"; warn "apktool: sha256 tidak cocok"; return 1; fi
+        mv "$j.tmp" "$j"
+    fi
+    echo "$j"
+}
+gamekeys_patch() { # <dir app GameKeys di port>
+    local dir=$1 apk w="$WORK/gamekeys_patch" jar smali kd="$WORK/aosp_testkey" o
+    apk=$(find "$dir" -maxdepth 1 -name '*.apk' | head -n1)
+    [[ -n $apk ]] || return 1
+    command -v java >/dev/null && command -v apksigner >/dev/null && command -v zipalign >/dev/null \
+        || { warn "GameKeys patch: java/apksigner/zipalign tidak ada"; return 1; }
+    jar=$(apktool_jar) || { warn "GameKeys patch: apktool gagal diunduh"; return 1; }
+    rm -rf "$w"; mkdir -p "$w"
+    if ! java -jar "$jar" d -f -o "$w/src" "$apk" > "$w/log" 2>&1; then warn "GameKeys patch: decode gagal: $(tail -n1 "$w/log")"; return 1; fi
+    smali="$w/src/smali/org/lineageos/gamekeys/service/EventListenerService.smali"
+    if [[ ! -f $smali ]] || ! grep -q 'ActivityTaskManager;->registerTaskStackListener' "$smali"; then
+        warn "GameKeys patch: struktur EventListenerService berbeda dari yang dikenal, patch dibatalkan"; return 1
+    fi
+    sed -i 's#invoke-virtual {\([vp][0-9]*\), \([vp][0-9]*\)}, Landroid/app/ActivityTaskManager;->registerTaskStackListener(Landroid/app/TaskStackListener;)V#invoke-static {\1, \2}, Lorg/lineageos/gamekeys/service/PortTaskCompat;->register(Landroid/app/ActivityTaskManager;Landroid/app/TaskStackListener;)V#; s#invoke-virtual {\([vp][0-9]*\), \([vp][0-9]*\)}, Landroid/app/ActivityTaskManager;->unregisterTaskStackListener(Landroid/app/TaskStackListener;)V#invoke-static {\1, \2}, Lorg/lineageos/gamekeys/service/PortTaskCompat;->unregister(Landroid/app/ActivityTaskManager;Landroid/app/TaskStackListener;)V#' "$smali"
+    if grep -q 'ActivityTaskManager;->registerTaskStackListener' "$smali"; then warn "GameKeys patch: panggilan register tidak terganti"; return 1; fi
+    cp "$SCRIPT_DIR/../patches/gamekeys/PortTaskCompat.smali" "$(dirname "$smali")/"
+    if ! grep -q 'android.permission.REAL_GET_TASKS' "$w/src/AndroidManifest.xml"; then
+        sed -i '0,/<uses-permission /s##<uses-permission android:name="android.permission.REAL_GET_TASKS"/>\n    &#' "$w/src/AndroidManifest.xml"
+    fi
+    if ! java -jar "$jar" b -o "$w/built.apk" "$w/src" >> "$w/log" 2>&1; then warn "GameKeys patch: build gagal: $(tail -n1 "$w/log")"; return 1; fi
+    # resource dari APK asli dipertahankan; ID resource hasil build harus sama persis
+    rm -rf "$w/chk"
+    java -jar "$jar" d -s -f -o "$w/chk" "$w/built.apk" >> "$w/log" 2>&1 || true
+    if ! cmp -s "$w/src/res/values/public.xml" "$w/chk/res/values/public.xml"; then warn "GameKeys patch: ID resource berubah, patch dibatalkan"; return 1; fi
+    o=$(python3 - "$apk" "$w/built.apk" "$w/merged.apk" <<'PY'
+import sys, zipfile
+orig, built, out = sys.argv[1:4]
+take = {"classes.dex", "AndroidManifest.xml"}
+with zipfile.ZipFile(built) as b:
+    new = {n: b.read(n) for n in take}
+    extra = [n for n in b.namelist() if n.startswith("classes") and n.endswith(".dex") and n not in take]
+    for n in extra:
+        new[n] = b.read(n)
+with zipfile.ZipFile(orig) as z, zipfile.ZipFile(out, "w") as o:
+    for i in z.infolist():
+        n = i.filename
+        # hanya file tanda tangan lama yang dibuang; META-INF/services (ServiceLoader, mis. coroutines) wajib tetap ada
+        if n in new or n == "META-INF/MANIFEST.MF" or (n.startswith("META-INF/") and n.count("/") == 1
+                and n.rsplit(".", 1)[-1].upper() in ("SF", "RSA", "DSA", "EC")):
+            continue
+        o.writestr(i, z.read(i.filename))
+    for n, data in new.items():
+        o.writestr(zipfile.ZipInfo(n, date_time=(2009, 1, 1, 0, 0, 0)), data, compress_type=zipfile.ZIP_DEFLATED)
+print(len(new))
+PY
+) || { warn "GameKeys patch: gabung APK gagal"; return 1; }
+    zipalign -f -p 4 "$w/merged.apk" "$w/aligned.apk" >/dev/null || { warn "GameKeys patch: zipalign gagal"; return 1; }
+    aosp_key testkey "$AOSP_TESTKEY_SHA256" || return 1
+    apksigner sign --key "$kd/testkey.pk8" --cert "$kd/testkey.x509.pem" --out "$w/signed.apk" "$w/aligned.apk" >/dev/null 2>>"$w/log" \
+        || { warn "GameKeys patch: apksigner gagal"; return 1; }
+    if [[ $(python3 "$SCRIPT_DIR/apk_index.py" --apk "$w/signed.apk") != org.lineageos.gamekeys ]] \
+       || ! python3 "$SCRIPT_DIR/apk_index.py" --perms "$w/signed.apk" | grep -qx 'android.permission.REAL_GET_TASKS'; then
+        warn "GameKeys patch: hasil APK tidak valid"; return 1
+    fi
+    cp "$w/signed.apk" "$apk"; chmod 644 "$apk"
+    rm -rf "$w"
+    log "  GameKeys patch: $o file dex/manifest diganti, resource asli dipertahankan"
     return 0
 }
 
