@@ -4,7 +4,8 @@ rom_branding.py - ubah identitas build ROM donor di build.prop: maintainer & sta
 
   rom_branding.py --maintainer NAMA --type UNOFFICIAL PROPFILE...
 
-- prop maintainer ROM (ro.<rom>.maintainer, ro.<rom>.build.maintainer, ...) -> NAMA
+- prop maintainer ROM (ro.<rom>.maintainer, ro.<rom>.build.maintainer, ...) -> NAMA; prop data
+  maintainer lama lainnya (ro.<rom>.maintainer.photo/.github/.telegram/... ) dikosongkan
 - prop jenis rilis ROM (ro.<rom>.releasetype, ro.<rom>.build.type, ro.<rom>.release_type, ...)
   bernilai OFFICIAL -> UNOFFICIAL (ro.build.type = user/userdebug TIDAK disentuh)
 - kata OFFICIAL di nilai prop versi/nama tampilan (mis. ro.afterlife.version=8.4-Ophelia-OFFICIAL_...)
@@ -18,6 +19,8 @@ import re
 MAINT_KEY = re.compile(r'^ro\.(?!build\.|product\.|system\.|vendor\.|odm\.)[a-z0-9_.]*maintainer[a-z0-9_.]*$', re.I)
 TYPE_KEY = re.compile(r'^ro\.(?!build\.|product\.|system\.|vendor\.|odm\.|system_ext\.)[a-z0-9_]+\.'
                       r'(?:[a-z0-9_]+\.)*(?:releasetype|release_type|release\.type|build\.type|buildtype|build_type|type)$', re.I)
+EXTRA_KEY = re.compile(r'photo|avatar|image|picture|pic|icon|github|git|telegram|tg|facebook|fb|instagram|insta|ig|'
+                       r'twitter|tiktok|youtube|yt|xda|link|url|uri|web|site|donat|paypal|support|social|contact|mail|email', re.I)
 SKIP_KEY = re.compile(r'fingerprint|description|\.build\.date|\.build\.id$', re.I)
 WORD = re.compile(r'(?<![A-Za-z])(official)(?![A-Za-z])', re.I)
 
@@ -51,7 +54,8 @@ def main():
             k = k.strip()
             nv = v
             if a.maintainer and MAINT_KEY.match(k):
-                nv = a.maintainer
+                # data maintainer lama selain nama (foto, link sosial media, donasi) dikosongkan
+                nv = "" if EXTRA_KEY.search(k.split("maintainer", 1)[-1]) else a.maintainer
                 if nv != v:
                     nm += 1
             elif TYPE_KEY.match(k) and v.strip().lower() == "official":
