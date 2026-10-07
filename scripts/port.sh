@@ -71,6 +71,8 @@ INSTALLER=${INSTALLER:-auto}                # auto | base (META-INF dari ROM bas
 RECOVERY_SUPER=${RECOVERY_SUPER:-zst}      # hanya INSTALLER=ours: raw = images/super.img | zst = images/super.img.zst
 RECOVERY_IMG=${RECOVERY_IMG:-}              # opsional: URL/path recovery.img custom (OrangeFox dll)
 BOOT_IMG=${BOOT_IMG:-}                      # opsional: URL/path boot.img custom (kernel), menggantikan boot.img base
+ROM_MAINTAINER=${ROM_MAINTAINER-KingD2N}     # identitas build ROM port: maintainer (kosong = tidak diubah)
+ROM_RELEASE_TYPE=${ROM_RELEASE_TYPE:-UNOFFICIAL} # OFFICIAL di prop versi/jenis rilis ROM donor diganti ini
 GBOARD_APK=${GBOARD_APK:-}                  # opsional: URL/path Gboard (LatinImeGoogle.apk) -> jadi keyboard sistem
 GBOARD_DIR=${GBOARD_DIR:-product/app/LatinImeGoogle}
 GBOARD_PACKAGE=${GBOARD_PACKAGE:-com.google.android.inputmethod.latin}   # package yang diharapkan dari GBOARD_APK
@@ -696,6 +698,20 @@ merge_device_props() {
 }
 
 # ------------------------------------------------------------------ patch: port
+# ROM hasil port bukan rilis official maintainer donor: maintainer -> ROM_MAINTAINER, OFFICIAL ->
+# ROM_RELEASE_TYPE di build.prop system/system_ext/product (dipakai halaman "Tentang ponsel" ROM)
+rom_branding() {
+    local f files=() res
+    [[ -n $ROM_MAINTAINER ]] || { log "branding: ROM_MAINTAINER kosong, identitas build donor tidak diubah"; return 0; }
+    for f in "${PORT_PROP_FILES[@]}"; do [[ -f $P_FS/$f ]] && files+=("$P_FS/$f"); done
+    [[ ${#files[@]} -gt 0 ]] || return 0
+    res=$(python3 "$SCRIPT_DIR/rom_branding.py" --maintainer "$ROM_MAINTAINER" --type "$ROM_RELEASE_TYPE" "${files[@]}")
+    grep -v '^RESULT' <<< "$res" | sed "s|$P_FS/||; s/^/    /" || true
+    res=$(sed -n 's/^RESULT //p' <<< "$res")
+    if [[ ${res%% *} -gt 0 ]]; then ok "branding: maintainer -> $ROM_MAINTAINER (${res%% *} prop), $ROM_RELEASE_TYPE (${res#* } prop)"
+    else warn "branding: ROM donor tidak punya prop maintainer (ro.<rom>.maintainer); teks maintainer di Tentang ponsel mungkin berasal dari resource app dan tidak berubah. $ROM_RELEASE_TYPE: ${res#* } prop"; fi
+}
+
 # codename donor: dari props device ROM AOSP; lewati nama generik
 detect_donor() {
     local c v hint t
@@ -1835,6 +1851,7 @@ main() {
         warn "base vendor device=$base_dev, bukan $TARGET_DEVICE (ALLOW_OTHER_BASE=true)"
     fi
     donor=$(detect_donor)
+    rom_branding
     rid=$(rom_identity); port_name=${rid%% *}; port_ver=${rid#* }
     log "donor=${donor:-?}  base=$base_dev ($btype)  ROM=$port_name  versi=$port_ver"
     [[ -n $donor ]] || warn "codename donor tidak terdeteksi -> RRO khas donor hanya dibuang lewat DEVICE_OVERLAY_GLOBS"

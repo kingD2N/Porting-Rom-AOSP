@@ -111,6 +111,7 @@ images/super.img.zst            super (system/system_ext/product donor + vendor/
 | `base_extras` | `true` = GameKeys (tombol bahu) + Leds (LED RGB) + Aperture (kamera) dari base LineageOS |
 | `dolby_ui` | `lunaris` (default) / `dax`. Lihat addon Dolby di atas |
 | `lunaris_apk_url` | URL `LunarisDolby.apk` (APK utuh berisi `classes.dex`). Kosong = `addons/dolby/LunarisDolby.apk` |
+| `maintainer` | `KingD2N` (default): prop maintainer ROM donor (`ro.<rom>.maintainer`) diganti nama ini, dan `OFFICIAL` di prop versi/jenis rilis jadi `UNOFFICIAL` (halaman Tentang ponsel & nama zip). Kosong = identitas donor tidak diubah |
 | `addons` | `miuicamera dolby` (default). `miuicamera` = MIUI Camera ingres, `dolby` = Dolby Atmos DAX. Kosong / `none` = tanpa addon |
 | `boot_img_url` | default boot.img D2N (5.10.271-gki-MIX); kosongkan = kernel ROM base |
 | `disable_encryption` | `true` untuk test build pertama |
@@ -209,6 +210,7 @@ scripts/vendor_boot_fstab.py             patch fstab first-stage di vendor_boot 
 scripts/fsconfig_check.py                cek hasil ekstrak per path + bersihkan fs_config
 scripts/elf_scan.py                      cari executable 32-bit di vendor/odm (donor 64-bit only)
 scripts/vintf_relax.py                   jadikan optional HAL framework yang tidak ada di donor (device matrix vendor)
+scripts/rom_branding.py                  maintainer & OFFICIAL -> UNOFFICIAL di build.prop donor
 scripts/rc_imports.py                    cek import rc system yang bergantung prop (ro.zygote, ro.mediaserver.64b.enable)
 scripts/rc_disable32.py                  nonaktifkan service rc vendor/odm yang binary-nya 32-bit (donor 64-bit only)
 scripts/dl_helper.py                     link Google Drive/SourceForge/Pixeldrain/MediaFire -> unduh langsung, tolak HTML

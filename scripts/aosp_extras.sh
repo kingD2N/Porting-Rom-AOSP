@@ -343,17 +343,17 @@ PORT_CIL_TAG="; [port-base-app]"   # penanda baris CIL tambahan (dibuang lagi ka
 # app yang target SDK <= 36 jalan sebagai platform_app_36 / priv_app_36 (bukan platform_app/priv_app),
 # jadi izin yang hanya diberikan ke platform_app tidak berlaku (GameKeys crash: find touchinjector ditolak)
 app_domains() { # -> daftar type platform_app*/priv_app* donor, dipisah spasi
-    local pfx=(platform_app priv_app) cil f out=""
+    local dpfx=(platform_app priv_app) cil f out=""
     for f in "$P_FS/system/system/etc/selinux/plat_sepolicy.cil" "$P_FS/system_ext/etc/selinux/system_ext_sepolicy.cil" \
              "$P_FS/product/etc/selinux/product_sepolicy.cil"; do
         [[ -f $f ]] && cil+=" $f"
     done
     if [[ -n ${cil:-} ]]; then
         # shellcheck disable=SC2086
-        out=$(grep -ohE "^\((type) ($(IFS='|'; echo "${pfx[*]}"))(_[0-9]+)?\)" $cil 2>/dev/null \
+        out=$(grep -ohE "^\((type) ($(IFS="|"; echo "${dpfx[*]}"))(_[0-9]+)?\)" $cil 2>/dev/null \
               | sed -E 's/^\(type ([^)]*)\)/\1/' | sort -u | tr '\n' ' ')
     fi
-    [[ -n ${out// /} ]] || out="${pfx[*]}"
+    [[ -n ${out// /} ]] || out="${dpfx[*]}"
     echo "${out% }"
 }
 base_app_hal_sepolicy() { # <package>

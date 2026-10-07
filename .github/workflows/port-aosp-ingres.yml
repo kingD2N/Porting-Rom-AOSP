@@ -63,6 +63,11 @@ on:
         required: false
         default: ""
         type: string
+      maintainer:
+        description: "Maintainer di Tentang ponsel + status UNOFFICIAL (ganti prop maintainer/OFFICIAL ROM donor). Kosong = tidak diubah"
+        required: false
+        default: "KingD2N"
+        type: string
       boot_img_url:
         description: "URL boot.img custom (default: kernel D2N 5.10.271-gki-MIX). Kosongkan = boot.img ROM base"
         required: false
@@ -276,6 +281,7 @@ jobs:
           COPY_FROM_BASE: ${{ inputs.copy_from_base }}
           BASE_EXTRAS: ${{ inputs.base_extras }}
           ADDONS: ${{ inputs.addons }}
+          ROM_MAINTAINER: ${{ inputs.maintainer }}
           DOLBY_UI: ${{ inputs.dolby_ui }}
           LUNARIS_DOLBY_APK: ${{ inputs.lunaris_apk_url }}
           PACKAGE_TYPE: ${{ inputs.package_type }}
