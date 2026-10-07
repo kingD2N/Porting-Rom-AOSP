@@ -10,6 +10,9 @@ Pixeldrain, MediaFire) yang kalau diunduh mentah menghasilkan HTML, bukan file.
   dl_helper.py mediafire <html>       -> URL file asli dari halaman MediaFire; exit 1 kalau tidak ada
   dl_helper.py sniff <file>           -> html | zip | payload | gzip | xz | zstd | android | sparse | unknown
   dl_helper.py html-reason <html>     -> alasan singkat kalau HTML berisi pesan error yang dikenali
+  dl_helper.py signed <url>           -> link bertanda tangan sementara (S3/Spaces/R2, X-Amz-Date +
+                                         X-Amz-Expires): "<detik_sisa> <kedaluwarsa_UTC> <masa_berlaku>",
+                                         kosong kalau bukan link seperti itu
 """
 import html as htmlmod
 import re
@@ -120,6 +123,23 @@ def html_reason(page):
     return "server mengirim halaman HTML, bukan file ROM (link halaman web, bukan link unduh langsung)"
 
 
+def signed(url, now=None):
+    """(sisa_detik, waktu_kedaluwarsa_UTC, masa_berlaku_detik) untuk presigned URL AWS SigV4, atau None"""
+    import calendar
+    import time
+    q = {k.lower(): v[0] for k, v in parse_qs(urlparse(url).query).items()}
+    d, e = q.get("x-amz-date"), q.get("x-amz-expires")
+    if not d or not e or not e.isdigit():
+        return None
+    try:
+        t0 = calendar.timegm(time.strptime(d, "%Y%m%dT%H%M%SZ"))
+    except ValueError:
+        return None
+    end = t0 + int(e)
+    now = time.time() if now is None else now
+    return int(end - now), time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(end)), int(e)
+
+
 def main():
     if len(sys.argv) != 3:
         raise SystemExit(__doc__)
@@ -139,6 +159,10 @@ def main():
         print(out)
     elif cmd == "sniff":
         print(sniff(arg))
+    elif cmd == "signed":
+        r = signed(arg)
+        if r:
+            print("%d %s %d" % (r[0], r[1].replace(" ", "_"), r[2]))
     else:
         raise SystemExit(__doc__)
     return 0

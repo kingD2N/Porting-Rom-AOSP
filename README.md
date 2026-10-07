@@ -103,7 +103,7 @@ images/super.img.zst            super (system/system_ext/product donor + vendor/
 | Input | Isi |
 |---|---|
 | `base_rom_url` | OTA ROM AOSP ingres (`.zip` payload.bin), atau fastboot MIUI/HyperOS ingres (`.tgz`), atau zip xiaomi.eu ingres |
-| `port_rom_url` | OTA ROM AOSP donor (`.zip` berisi `payload.bin`) |
+| `port_rom_url` | OTA ROM AOSP donor (`.zip` berisi `payload.bin`). Link bertanda tangan sementara (mis. tombol download AfterLife: `...digitaloceanspaces.com/...?X-Amz-Expires=3600`, berlaku 1 jam) dicek masa berlakunya di awal dan diunduh lebih dulu sebelum base; kalau sudah kedaluwarsa, workflow langsung berhenti dengan pesan jelas. Ambil link baru tepat sebelum menjalankan workflow, atau unggah ROM ke tempat permanen |
 | `super_size` | `9126805504` (super ingres). Cek di HP: `su -c blockdev --getsize64 /dev/block/by-name/super` |
 | `package_type` | `ota` (default, zip payload.bin seperti ROM AOSP) atau `recovery` (images + super.img.zst, ditulis dd) |
 | `ext4_partitions` | `vendor odm system vendor_dlkm product system_ext` (bisa diedit langsung di HP). Kalau super tidak muat, partisi EXT4 terbesar otomatis jadi EROFS. `vendor_dlkm` dipakai apa adanya dari base (read-only) |
