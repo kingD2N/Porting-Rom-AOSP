@@ -244,6 +244,7 @@ copy_from_base() {
             elif [[ $hpkg == org.lineageos.gamekeys ]]; then
                 if gamekeys_patch "$dst"; then
                     ok "GameKeys: donor kunci privat -> APK di-patch (deteksi app aktif lewat REAL_GET_TASKS, bukan TaskStackListener) dan ditandatangani testkey -> priv_app"
+                    gamekeys_overlay_grant
                 else
                     rm -rf "$dst"
                     warn "GameKeys (tombol bahu) TIDAK disalin: donor ditandatangani kunci privat ($DONOR_PLATFORM_CERT) dan patch APK gagal (lihat pesan di atas). Tanpa patch app crash berulang"
@@ -419,6 +420,31 @@ PY
     rm -rf "$w"
     log "  GameKeys patch: $o file dex/manifest diganti, resource asli dipertahankan"
     return 0
+}
+
+# GameKeys tanpa kunci platform tidak otomatis dapat izin overlay (SYSTEM_ALERT_WINDOW = appop):
+# layar atur posisi tombol (window TYPE_APPLICATION_OVERLAY) gagal dibuka dan tombol tidak berfungsi.
+# Setiap boot selesai, init menjalankan 'cmd appops set ... allow' sebagai domain shell (sama seperti
+# adb shell). init -> shell butuh izin transisi SELinux (ditambah ke system_ext_sepolicy.cil donor,
+# ditandai PORT_CIL_TAG: ikut dicek secilc dan dibuang kalau bikin compile gagal).
+gamekeys_overlay_grant() {
+    local rc="$P_FS/system_ext/etc/init/port-gamekeys-overlay.rc" cil="$P_FS/system_ext/etc/selinux/system_ext_sepolicy.cil" cfg
+    [[ -f $cil ]] || { warn "GameKeys: system_ext_sepolicy.cil donor tidak ada, izin overlay harus diberi manual (appops)"; return 0; }
+    mkdir -p "$(dirname "$rc")"
+    cat > "$rc" <<'RC'
+# Porting-Rom-AOSP: GameKeys (tanpa kunci platform donor) butuh izin overlay untuk layar atur tombol bahu
+on property:sys.boot_completed=1
+    exec_background u:r:shell:s0 shell shell -- /system/bin/sh -c "cmd appops set org.lineageos.gamekeys SYSTEM_ALERT_WINDOW allow"
+RC
+    chmod 644 "$rc"
+    if [[ -n $(tail -c1 "$cil") ]]; then echo >> "$cil"; fi
+    printf '%s %s\n' "(allow init shell (process (transition)))" "$PORT_CIL_TAG" \
+        "(allow shell shell_exec (file (entrypoint)))" "$PORT_CIL_TAG" >> "$cil"
+    cfg="$P_FS/config/system_ext_file_contexts"
+    if [[ -f $cfg ]]; then
+        python3 "$SCRIPT_DIR/addon_tool.py" ctx "$cfg" "$P_FS/system_ext" system_ext etc/init/port-gamekeys-overlay.rc >/dev/null || true
+    fi
+    ok "GameKeys: izin overlay (SYSTEM_ALERT_WINDOW) diberikan otomatis tiap boot (system_ext/etc/init/port-gamekeys-overlay.rc)"
 }
 
 PORT_CIL_TAG="; [port-base-app]"   # penanda baris CIL tambahan (dibuang lagi kalau compile gagal)
