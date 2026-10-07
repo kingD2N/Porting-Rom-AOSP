@@ -1483,7 +1483,11 @@ boot_compat() { # base.img custom.img
         if [[ $(cut -d. -f1,2 <<< "$kb") != "$(cut -d. -f1,2 <<< "$kn")" ]]; then
             die "versi kernel custom (${kn%%-*}) beda seri dengan base (${kb%%-*}). Modul di vendor_boot/vendor_dlkm tidak akan load -> bootloop"
         fi
-        if [[ ${kb%%-*} != "${kn%%-*}" ]]; then
+        if [[ ${kb%%-*} != "${kn%%-*}" && $kn =~ -(gki|android1[2-9]) ]]; then
+            # kernel GKI: KMI stabil antar sublevel, modul vendor tetap load (sudah dites di ingres:
+            # kernel D2N 5.10.271-gki di atas vendor_dlkm LineageOS 5.10.269 jalan normal)
+            ok "boot: kernel GKI custom ${kn%%-*} (base ${kb%%-*}) -> KMI GKI sama, modul vendor tetap load"
+        elif [[ ${kb%%-*} != "${kn%%-*}" ]]; then
             warn "sublevel kernel beda (base ${kb%%-*}, custom ${kn%%-*}). GKI biasanya tetap load modul vendor, tapi kalau layar/touch mati setelah boot, cek dmesg 'disagrees about version'"
         elif [[ $kb != "$kn" ]]; then
             warn "build kernel beda (base $kb, custom $kn). Modul di vendor_boot (dlkm) & vendor_dlkm dibuat untuk kernel base: kalau CRC simbol beda, modul gagal load (layar/touch/wifi mati). Cek dmesg 'disagrees about version' / 'Unknown symbol'"
