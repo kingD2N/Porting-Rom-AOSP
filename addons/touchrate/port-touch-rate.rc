@@ -1,0 +1,5 @@
+# addon port "touchrate": mode laporan sentuh tinggi panel ST FTS ingres (touchfeature Xiaomi,
+# sama dengan "High touch polling rate" LineageOS) aktif sejak boot. Driver fts_spi menyimpan
+# nilainya dan menerapkan ulang setiap layar menyala lagi.
+on property:sys.boot_completed=1
+    write /sys/devices/virtual/touch/touch_dev/bump_sample_rate 1

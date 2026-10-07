@@ -1,0 +1,3 @@
+; addon touchrate: init menulis /sys/devices/virtual/touch/touch_dev/bump_sample_rate
+; (vendor_sysfs_touch, label dari genfscon vendor LineageOS ingres) saat boot.
+(allow {init} {vendor_sysfs_touch} (file (write open getattr)))

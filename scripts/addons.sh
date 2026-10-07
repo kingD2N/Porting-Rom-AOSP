@@ -7,6 +7,7 @@
 #               Sisi vendor (campostproc, libmialgo) sudah ada di vendor LineageOS ingres.
 #  dolby      : Dolby Atmos DAX (Gurinbone/hardware_dolby) -> HAL vendor.dolby.hardware.dms@2.0,
 #               efek audio (dap, volume leveler, game, vqe), UI DaxUI + daxService.
+#  touchrate  : mode laporan sentuh tinggi panel (bump_sample_rate touchfeature Xiaomi = 1) sejak boot.
 #
 #  Semua addon: bahan di-stage dulu, dependensi library dicek terhadap ROM hasil port.
 #  Kalau ada yang kurang -> addon dilewati (ROM tetap aman, hanya tanpa fitur itu).
@@ -14,7 +15,7 @@
 #  karena addon, seluruh addon dibatalkan (addon_rollback) supaya tidak bootloop.
 # =============================================================================
 
-ADDONS=${ADDONS-"miuicamera dolby"}   # kosong = tanpa addon
+ADDONS=${ADDONS-"miuicamera dolby touchrate"}   # kosong = tanpa addon
 ADDON_CIL_TAG="; [port-addon]"
 ADDON_DATA_DIR=${ADDON_DATA_DIR:-$SCRIPT_DIR/../addons}
 MIUICAMERA_DEVICE_REPO=${MIUICAMERA_DEVICE_REPO:-https://github.com/Gurinbone/android_device_xiaomi_miuicamera-ingres}
@@ -478,6 +479,23 @@ addon_lunaris() { # workdir
 # batalkan addon: tanpa argumen = addon yang sedang dipasang ($ADDON_CUR), "all" = semua addon
 # (dipanggil sepolicy_compile_check kalau sepolicy gabungan gagal di-compile karena baris addon).
 # Urutan mundur: file baru dihapus, file yang diubah dikembalikan ke keadaan sebelum addon.
+# touch sampling rate tinggi: driver fts_spi + xiaomi_touch dari vendor_dlkm LineageOS ingres.
+# Mode tinggi = bump_sample_rate 1 (fts_set_report_rate 0x01); Hz-nya ditentukan firmware panel.
+addon_touchrate() {
+    local vs="$B_FS/vendor/etc/selinux" rc="$B_FS/vendor/etc/init/port-touch-rate.rc"
+    ADDON_CUR=touchrate
+    if ! grep -qs '"/devices/virtual/touch/touch_dev/bump_sample_rate" (u object_r vendor_sysfs_touch ' "$vs/vendor_sepolicy.cil"; then
+        warn "addon touchrate: vendor base tidak punya node bump_sample_rate (vendor_sysfs_touch), dilewati"
+        return 1
+    fi
+    addon_install "$ADDON_DATA_DIR/touchrate/port-touch-rate.rc" "$rc"
+    chmod 644 "$rc"
+    addon_ctx "$B_FS" vendor etc/init/port-touch-rate.rc || true
+    addon_sepolicy "$ADDON_DATA_DIR/touchrate/sepolicy.cil" || { addon_rollback touchrate; return 1; }
+    ADDON_DONE+=(touchrate)
+    ok "addon touchrate: mode sampling sentuh tinggi aktif saat boot"
+}
+
 addon_rollback() {
     local who=${1:-$ADDON_CUR} i x name f b keepf=() keepb=() done=()
     for (( i=${#ADDON_BACKUPS[@]}-1; i>=0; i-- )); do
@@ -507,7 +525,8 @@ run_addons() {
             none) ;;
             miuicamera|miui-camera|miui_camera) addon_miuicamera || warn "addon MiuiCamera tidak dipasang (lihat pesan di atas)" ;;
             dolby|dolby-atmos|dax) addon_dolby || warn "addon Dolby tidak dipasang (lihat pesan di atas)" ;;
-            *) warn "ADDONS: '$a' tidak dikenal (pilihan: miuicamera dolby none)" ;;
+            touchrate|touch-rate|htpr) addon_touchrate || warn "addon touchrate tidak dipasang (lihat pesan di atas)" ;;
+            *) warn "ADDONS: '$a' tidak dikenal (pilihan: miuicamera dolby touchrate none)" ;;
         esac
     done
     if [[ ${#ADDON_DONE[@]} -gt 0 ]]; then ok "addons terpasang: ${ADDON_DONE[*]}"; fi

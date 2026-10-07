@@ -46,9 +46,9 @@ on:
         default: true
         type: boolean
       addons:
-        description: "Addon (pisah spasi): miuicamera = MIUI Camera ingres, dolby = Dolby Atmos (DAX). Kosong/none = tanpa addon"
+        description: "Addon (pisah spasi): miuicamera = MIUI Camera ingres, dolby = Dolby Atmos (DAX), touchrate = sampling sentuh tinggi sejak boot. Kosong/none = tanpa addon"
         required: false
-        default: "miuicamera dolby"
+        default: "miuicamera dolby touchrate"
         type: string
       dolby_ui:
         description: "UI Dolby (addon dolby): lunaris = Lunaris Dolby (donor test-key AOSP / donor yang sudah punya Lunaris), selain itu otomatis DaxUI | dax = selalu DaxUI"
