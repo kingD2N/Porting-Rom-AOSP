@@ -37,6 +37,10 @@ etc/dolby/dax-default.xml etc/dolby/dax-moto_1.xml etc/dolby/dax-moto_2.xml etc/
 etc/init/vendor.dolby.hardware.dms@2.0-service.rc
 etc/vintf/manifest/vendor.dolby.hardware.dms@2.0-service.xml"
 DOLBY_APPS="DaxUI:com.dolby.daxappui daxService:com.dolby.daxservice"
+# auto = kalau ROM donor sudah membawa UI Dolby sendiri (mis. org.lunaris.dolby di AfterLife), UI itu
+#        yang dipakai dan DaxUI/daxService tidak dipasang (dua pengontrol efek yang sama saling timpa)
+# dax  = selalu pasang DaxUI + daxService
+DOLBY_UI=${DOLBY_UI:-auto}
 # AudioFX/MusicFX bentrok dengan DAX (sama-sama memasang efek global) -> dibuang (RemovePackagesDolby)
 DOLBY_REMOVE_PKGS="org.lineageos.audiofx com.android.musicfx"
 
@@ -272,7 +276,7 @@ addon_miuicamera() {
 
 # ------------------------------------------------------------------ Dolby
 addon_dolby() {
-    local d="$WORK/addons/dolby" src st vend="$B_FS/vendor" f rel rels=() serels=() n=0 x app pkg rc donor_pkgs se="$P_FS/system_ext"
+    local d="$WORK/addons/dolby" src st vend="$B_FS/vendor" f rel rels=() serels=() n=0 x app pkg rc donor_pkgs donor_ui="" se="$P_FS/system_ext"
     ADDON_CUR=dolby
     log "addon Dolby: sumber $DOLBY_REPO ($DOLBY_BRANCH)"
     if [[ ! -d $vend ]]; then warn "addon Dolby: vendor base tidak diekstrak"; return 1; fi
@@ -361,7 +365,13 @@ addon_dolby() {
         donor_pkgs=$(python3 "$SCRIPT_DIR/apk_index.py" "$P_FS" | cut -f1 || true)
         # shellcheck disable=SC2086  # daftar package dipisah spasi
         addon_remove_pkgs "addon Dolby" $DOLBY_REMOVE_PKGS
-        for x in $DOLBY_APPS; do
+        local apps=$DOLBY_APPS
+        donor_ui=$(grep -i 'dolby' <<< "$donor_pkgs" | grep -vxF -e com.dolby.daxappui -e com.dolby.daxservice | head -n1 || true)
+        if [[ -n $donor_ui && ${DOLBY_UI,,} != dax ]]; then
+            ok "addon Dolby: ROM donor sudah punya UI Dolby ($donor_ui) -> UI itu dipakai, DaxUI/daxService tidak dipasang (DOLBY_UI=dax untuk tetap memasang)"
+            apps=""
+        fi
+        for x in $apps; do
             app=${x%%:*}; pkg=${x#*:}
             if grep -qxF "$pkg" <<< "$donor_pkgs"; then log "  $pkg sudah ada di ROM donor, tidak disalin"; continue; fi
             mkdir -p "$d/stage/se/priv-app/$app"
@@ -389,7 +399,7 @@ addon_dolby() {
     fi
     ADDON_DONE+=(dolby)
     if is_true "$have_hal"; then ok "addon Dolby: UI terpasang (HAL dari vendor base)"
-    else ok "addon Dolby terpasang: HAL dms@2.0 + efek DAP/volume leveler/game/VQE + aplikasi Dolby Atmos (DaxUI)"; fi
+    else ok "addon Dolby terpasang: HAL dms@2.0 + efek DAP/volume leveler/game/VQE + UI ${donor_ui:-DaxUI}"; fi
 }
 
 # batalkan addon: tanpa argumen = addon yang sedang dipasang ($ADDON_CUR), "all" = semua addon
