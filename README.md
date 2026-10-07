@@ -111,7 +111,7 @@ images/super.img.zst            super (system/system_ext/product donor + vendor/
 | `base_extras` | `true` = GameKeys (tombol bahu) + Leds (LED RGB) + Aperture (kamera) dari base LineageOS |
 | `dolby_ui` | `lunaris` (default) / `dax`. Lihat addon Dolby di atas |
 | `lunaris_apk_url` | URL `LunarisDolby.apk` (APK utuh berisi `classes.dex`). Kosong = `addons/dolby/LunarisDolby.apk` |
-| `maintainer` | `KingD2N` (default): prop maintainer ROM donor (`ro.<rom>.maintainer`) diganti nama ini, dan `OFFICIAL` di prop versi/jenis rilis jadi `UNOFFICIAL` (halaman Tentang ponsel & nama zip). Kosong = identitas donor tidak diubah RRO khusus ROM di `overlays/<rom>/` ikut dipasang kalau donor punya `ro.<rom>.version` (AfterLife: kartu maintainer di Tentang ponsel tanpa foto & link GitHub/Telegram/Facebook/Instagram maintainer asli) |
+| `maintainer` | `KingD2N` (default): prop maintainer ROM donor (`ro.<rom>.maintainer`) diganti nama ini, dan `OFFICIAL` di prop versi/jenis rilis jadi `UNOFFICIAL` (halaman Tentang ponsel & nama zip). Kosong = identitas donor tidak diubah. RRO khusus ROM di `overlays/<rom>/` ikut dipasang kalau donor punya `ro.<rom>.version` (AfterLife: kartu maintainer di Tentang ponsel tanpa foto & link GitHub/Telegram/Facebook/Instagram maintainer asli) |
 | `addons` | `miuicamera dolby` (default). `miuicamera` = MIUI Camera ingres, `dolby` = Dolby Atmos DAX. Kosong / `none` = tanpa addon |
 | `boot_img_url` | default boot.img D2N (5.10.271-gki-MIX); kosongkan = kernel ROM base |
 | `disable_encryption` | `true` untuk test build pertama |
