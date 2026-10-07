@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- username sosial media maintainer asli dikosongkan (tombolnya juga disembunyikan di layout) -->
+<resources>
+    <string name="maintainer_git_username" translatable="false"></string>
+    <string name="maintainer_tele_username" translatable="false"></string>
+    <string name="maintainer_fb_username" translatable="false"></string>
+    <string name="maintainer_ig_username" translatable="false"></string>
+</resources>

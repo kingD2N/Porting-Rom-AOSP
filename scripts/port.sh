@@ -710,6 +710,44 @@ rom_branding() {
     res=$(sed -n 's/^RESULT //p' <<< "$res")
     if [[ ${res%% *} -gt 0 ]]; then ok "branding: maintainer -> $ROM_MAINTAINER (${res%% *} prop), $ROM_RELEASE_TYPE (${res#* } prop)"
     else warn "branding: ROM donor tidak punya prop maintainer (ro.<rom>.maintainer); teks maintainer di Tentang ponsel mungkin berasal dari resource app dan tidak berubah. $ROM_RELEASE_TYPE: ${res#* } prop"; fi
+    branding_overlays
+}
+
+# RRO branding khusus ROM (overlays/<rom>/<Nama>/: AndroidManifest.xml + res/), mis. kartu maintainer
+# AfterLife di Tentang ponsel tanpa foto & link sosial media maintainer asli. Dipakai kalau build.prop
+# donor punya ro.<rom>.version. Dibangun saat port (apktool/aapt2), ditandatangani testkey, dipasang
+# ke product/overlay (RRO statis, aktif sendiri).
+branding_overlays() {
+    local d rom name src w jar out kd="$WORK/aosp_testkey" n=0 rels=()
+    [[ -d $SCRIPT_DIR/../overlays && -d $P_FS/product ]] || return 0
+    for d in "$SCRIPT_DIR"/../overlays/*/; do
+        rom=$(basename "$d")
+        grep -qsE "^ro\.${rom}\.version=" "${PORT_PROP_FILES[@]/#/$P_FS/}" || continue
+        for src in "$d"*/; do
+            name=$(basename "$src")
+            [[ -f $src/AndroidManifest.xml && -d $src/res ]] || continue
+            jar=$(apktool_jar) || { warn "branding overlay: apktool gagal diunduh, $name dilewati"; return 0; }
+            aosp_key testkey "$AOSP_TESTKEY_SHA256" || { warn "branding overlay: testkey tidak ada, $name dilewati"; return 0; }
+            w="$WORK/rro_$name"; rm -rf "$w"; mkdir -p "$w"; cp -a "$src" "$w/src"
+            printf '%s\n' "version: 2.12.1" "apkFileName: $name.apk" "isFrameworkApk: false" "usesFramework:" "  ids:" "  - 1" \
+                "  tag: null" "sdkInfo:" "  minSdkVersion: 31" "  targetSdkVersion: 34" "packageInfo:" "  forcedPackageId: 127" \
+                "  renameManifestPackage: null" "versionInfo:" "  versionCode: 1" "  versionName: '1'" "doNotCompress:" "- resources.arsc" \
+                > "$w/src/apktool.yml"
+            if ! java -jar "$jar" b "$w/src" -o "$w/u.apk" > "$w/log" 2>&1; then
+                warn "branding overlay $name: build gagal: $(tail -n1 "$w/log")"; continue
+            fi
+            zipalign -f -p 4 "$w/u.apk" "$w/a.apk" >/dev/null || { warn "branding overlay $name: zipalign gagal"; continue; }
+            out="$P_FS/product/overlay/$name.apk"; mkdir -p "$(dirname "$out")"
+            apksigner sign --key "$kd/testkey.pk8" --cert "$kd/testkey.x509.pem" --out "$out" "$w/a.apk" >/dev/null 2>>"$w/log" \
+                || { warn "branding overlay $name: apksigner gagal"; rm -f "$out"; continue; }
+            rm -f "$out.idsig"; chmod 644 "$out"; rm -rf "$w"
+            rels+=("overlay/$name.apk"); n=$((n + 1))
+            ok "branding overlay: product/overlay/$name.apk ($rom)"
+        done
+    done
+    if [[ $n -gt 0 && -f $P_FS/config/product_file_contexts ]]; then
+        python3 "$SCRIPT_DIR/addon_tool.py" ctx "$P_FS/config/product_file_contexts" "$P_FS/product" product "${rels[@]}" >/dev/null || true
+    fi
 }
 
 # codename donor: dari props device ROM AOSP; lewati nama generik
