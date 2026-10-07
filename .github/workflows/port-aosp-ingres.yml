@@ -50,6 +50,19 @@ on:
         required: false
         default: "miuicamera dolby"
         type: string
+      dolby_ui:
+        description: "UI Dolby (addon dolby): lunaris = Lunaris Dolby (donor test-key AOSP / donor yang sudah punya Lunaris), selain itu otomatis DaxUI | dax = selalu DaxUI"
+        required: false
+        default: lunaris
+        type: choice
+        options:
+          - lunaris
+          - dax
+      lunaris_apk_url:
+        description: "URL LunarisDolby.apk (APK utuh berisi classes.dex). Kosong = addons/dolby/LunarisDolby.apk di repo"
+        required: false
+        default: ""
+        type: string
       boot_img_url:
         description: "URL boot.img custom (default: kernel D2N 5.10.271-gki-MIX). Kosongkan = boot.img ROM base"
         required: false
@@ -263,6 +276,8 @@ jobs:
           COPY_FROM_BASE: ${{ inputs.copy_from_base }}
           BASE_EXTRAS: ${{ inputs.base_extras }}
           ADDONS: ${{ inputs.addons }}
+          DOLBY_UI: ${{ inputs.dolby_ui }}
+          LUNARIS_DOLBY_APK: ${{ inputs.lunaris_apk_url }}
           PACKAGE_TYPE: ${{ inputs.package_type }}
           BOOT_IMG: ${{ inputs.boot_img_url }}
           DISABLE_ENCRYPTION: ${{ inputs.disable_encryption }}

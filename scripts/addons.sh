@@ -37,10 +37,18 @@ etc/dolby/dax-default.xml etc/dolby/dax-moto_1.xml etc/dolby/dax-moto_2.xml etc/
 etc/init/vendor.dolby.hardware.dms@2.0-service.rc
 etc/vintf/manifest/vendor.dolby.hardware.dms@2.0-service.xml"
 DOLBY_APPS="DaxUI:com.dolby.daxappui daxService:com.dolby.daxservice"
-# auto = kalau ROM donor sudah membawa UI Dolby sendiri (mis. org.lunaris.dolby di AfterLife), UI itu
-#        yang dipakai dan DaxUI/daxService tidak dipasang (dua pengontrol efek yang sama saling timpa)
-# dax  = selalu pasang DaxUI + daxService
-DOLBY_UI=${DOLBY_UI:-auto}
+# UI Dolby (hanya satu yang dipasang: dua pengontrol efek DAP yang sama saling menimpa)
+# lunaris = Lunaris Dolby (org.lunaris.dolby, default). Urutan:
+#           1. donor sudah punya org.lunaris.dolby (mis. AfterLife) -> dipakai apa adanya
+#           2. APK Lunaris (LUNARIS_DOLBY_APK) ditandatangani kunci platform donor -> dipasang.
+#              Lunaris memakai sharedUserId=android.uid.system, jadi WAJIB kunci platform donor:
+#              hanya bisa kalau donor ditandatangani test-key AOSP
+#           3. selain itu: UI Dolby bawaan donor (kalau ada), terakhir DaxUI + daxService
+# dax     = selalu DaxUI + daxService
+DOLBY_UI=${DOLBY_UI:-lunaris}
+LUNARIS_DOLBY_PKG=org.lunaris.dolby
+# URL/path APK Lunaris Dolby (APK utuh berisi classes.dex). Kosong = addons/dolby/LunarisDolby.apk di repo
+LUNARIS_DOLBY_APK=${LUNARIS_DOLBY_APK:-}
 # AudioFX/MusicFX bentrok dengan DAX (sama-sama memasang efek global) -> dibuang (RemovePackagesDolby)
 DOLBY_REMOVE_PKGS="org.lineageos.audiofx com.android.musicfx"
 
@@ -367,9 +375,26 @@ addon_dolby() {
         addon_remove_pkgs "addon Dolby" $DOLBY_REMOVE_PKGS
         local apps=$DOLBY_APPS
         donor_ui=$(grep -i 'dolby' <<< "$donor_pkgs" | grep -vxF -e com.dolby.daxappui -e com.dolby.daxservice | head -n1 || true)
-        if [[ -n $donor_ui && ${DOLBY_UI,,} != dax ]]; then
-            ok "addon Dolby: ROM donor sudah punya UI Dolby ($donor_ui) -> UI itu dipakai, DaxUI/daxService tidak dipasang (DOLBY_UI=dax untuk tetap memasang)"
+        if [[ ${DOLBY_UI,,} == dax ]]; then
+            log "  DOLBY_UI=dax: DaxUI + daxService dipasang"
+        elif grep -qxF "$LUNARIS_DOLBY_PKG" <<< "$donor_pkgs"; then
+            donor_ui=$LUNARIS_DOLBY_PKG
+            ok "addon Dolby: ROM donor sudah punya Lunaris Dolby ($LUNARIS_DOLBY_PKG) -> dipakai, DaxUI/daxService tidak dipasang"
             apps=""
+        elif addon_lunaris "$d"; then
+            if [[ -n $donor_ui ]]; then
+                # shellcheck disable=SC2046  # daftar package UI Dolby donor lain
+                addon_remove_pkgs "addon Dolby (UI Dolby donor diganti Lunaris)" $(grep -i 'dolby' <<< "$donor_pkgs" \
+                    | grep -vxF -e com.dolby.daxappui -e com.dolby.daxservice -e "$LUNARIS_DOLBY_PKG" || true)
+            fi
+            donor_ui="$LUNARIS_DOLBY_PKG (Lunaris Dolby)"
+            apps=""
+            serels+=("${LUNARIS_RELS[@]}")
+        elif [[ -n $donor_ui ]]; then
+            ok "addon Dolby: Lunaris tidak bisa dipasang, UI Dolby bawaan donor ($donor_ui) yang dipakai"
+            apps=""
+        else
+            warn "addon Dolby: Lunaris Dolby tidak bisa dipasang (lihat pesan di atas) -> pakai DaxUI + daxService"
         fi
         for x in $apps; do
             app=${x%%:*}; pkg=${x#*:}
@@ -400,6 +425,48 @@ addon_dolby() {
     ADDON_DONE+=(dolby)
     if is_true "$have_hal"; then ok "addon Dolby: UI terpasang (HAL dari vendor base)"
     else ok "addon Dolby terpasang: HAL dms@2.0 + efek DAP/volume leveler/game/VQE + UI ${donor_ui:-DaxUI}"; fi
+}
+
+# Lunaris Dolby (org.lunaris.dolby, sharedUserId=android.uid.system) -> system_ext/priv-app/LunarisDolby.
+# 0 = terpasang (LUNARIS_RELS berisi path untuk label SELinux), 1 = tidak bisa (alasan sudah dicetak)
+LUNARIS_RELS=()
+addon_lunaris() { # workdir
+    local d=$1 src=$LUNARIS_DOLBY_APK apk st se="$P_FS/system_ext" pkg uid f
+    LUNARIS_RELS=()
+    if [[ -z $src ]]; then src="$ADDON_DATA_DIR/dolby/LunarisDolby.apk"; fi
+    mkdir -p "$d/lunaris"
+    if [[ $src =~ ^https?:// ]]; then
+        apk="$d/lunaris/LunarisDolby.apk"
+        dl_curl "$src" "$apk" || { warn "addon Dolby: unduh Lunaris Dolby gagal ($src)"; return 1; }
+    else
+        apk=$src
+        [[ -f $apk ]] || { warn "addon Dolby: APK Lunaris Dolby tidak ada ($apk). Isi env LUNARIS_DOLBY_APK atau taruh di addons/dolby/LunarisDolby.apk"; return 1; }
+    fi
+    pkg=$(python3 "$SCRIPT_DIR/apk_index.py" --info "$apk" 2>/dev/null || true)
+    uid=${pkg#*$'\t'}; pkg=${pkg%%$'\t'*}
+    if [[ $pkg != "$LUNARIS_DOLBY_PKG" ]]; then warn "addon Dolby: APK Lunaris berisi package '$pkg', bukan $LUNARIS_DOLBY_PKG"; return 1; fi
+    # APK system yang di-dexpreopt sering tanpa classes.dex (oat-nya terikat framework ROM asal) -> tidak bisa dipakai
+    if ! python3 -c 'import sys,zipfile; sys.exit(0 if "classes.dex" in zipfile.ZipFile(sys.argv[1]).namelist() else 1)' "$apk"; then
+        warn "addon Dolby: APK Lunaris tanpa classes.dex (dex di-strip saat build ROM asal), tidak bisa dipakai di ROM lain"
+        return 1
+    fi
+    st="$d/stage/lunaris/LunarisDolby"
+    rm -rf "$st"; mkdir -p "$st"; cp "$apk" "$st/LunarisDolby.apk"
+    # sharedUserId=android.uid.system: PackageManager menolak APK yang kuncinya beda dengan kunci platform
+    if ! platform_resign "$st"; then
+        warn "addon Dolby: Lunaris Dolby butuh kunci platform ROM donor (sharedUserId=$uid), donor ditandatangani kunci privat ($DONOR_PLATFORM_CERT) -> tidak bisa dipasang"
+        return 1
+    fi
+    rm -rf "$se/priv-app/LunarisDolby"
+    addon_install "$st" "$se/priv-app/LunarisDolby"
+    for f in privapp-permissions-dolby.xml:permissions preinstalled-packages-platform-dolby.xml:sysconfig; do
+        [[ -f $ADDON_DATA_DIR/dolby/${f%%:*} ]] || continue
+        addon_install "$ADDON_DATA_DIR/dolby/${f%%:*}" "$se/etc/${f#*:}/${f%%:*}"
+        LUNARIS_RELS+=("etc/${f#*:}/${f%%:*}")
+    done
+    LUNARIS_RELS+=(priv-app/LunarisDolby priv-app/LunarisDolby/LunarisDolby.apk)
+    ok "addon Dolby: Lunaris Dolby dipasang (system_ext/priv-app/LunarisDolby, kunci platform donor -> system_app)"
+    return 0
 }
 
 # batalkan addon: tanpa argumen = addon yang sedang dipasang ($ADDON_CUR), "all" = semua addon
