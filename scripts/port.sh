@@ -1863,6 +1863,8 @@ main() {
     if is_true "$LINKER_CHECK"; then linker_check; fi
     abi_check
     zygote_check
+    mediaserver_check
+    rc_imports_check
     ims_check
     rc_reboot_check
 
