@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- peta eksplisit: id ikut dipetakan ke id Settings (mode legacy tidak memetakan id) -->
+<overlay>
+    <item target="layout/afterlife_maintainer" value="@layout/afterlife_maintainer" />
+    <item target="drawable/maintainer_img" value="@drawable/maintainer_img" />
+    <item target="id/base_layout" value="@id/base_layout" />
+    <item target="id/fixed_layout" value="@id/fixed_layout" />
+    <item target="id/hidden_view" value="@id/hidden_view" />
+    <item target="id/status_icon" value="@id/status_icon" />
+    <item target="id/status_text" value="@id/status_text" />
+    <item target="id/maintained_by" value="@id/maintained_by" />
+    <item target="id/maintainer_name" value="@id/maintainer_name" />
+    <item target="id/expand_button" value="@id/expand_button" />
+    <item target="id/maintainer_name_expanded" value="@id/maintainer_name_expanded" />
+    <item target="id/device_model" value="@id/device_model" />
+    <item target="id/github" value="@id/github" />
+    <item target="id/telegram" value="@id/telegram" />
+    <item target="id/facebook" value="@id/facebook" />
+    <item target="id/instagram" value="@id/instagram" />
+    <item target="string/maintainer_git_username" value="@string/maintainer_git_username" />
+    <item target="string/maintainer_tele_username" value="@string/maintainer_tele_username" />
+    <item target="string/maintainer_fb_username" value="@string/maintainer_fb_username" />
+    <item target="string/maintainer_ig_username" value="@string/maintainer_ig_username" />
+</overlay>
