@@ -717,8 +717,13 @@ rom_branding() {
 # AfterLife di Tentang ponsel tanpa foto & link sosial media maintainer asli. Dipakai kalau build.prop
 # donor punya ro.<rom>.version. Dibangun saat port (apktool/aapt2), ditandatangani testkey, dipasang
 # ke product/overlay (RRO statis, aktif sendiri).
+BRANDING_OVERLAYS=${BRANDING_OVERLAYS:-false}   # true = pasang RRO overlays/<rom>/ (eksperimen, lihat README)
 branding_overlays() {
     local d rom name src w jar out kd="$WORK/aosp_testkey" n=0 rels=()
+    if ! is_true "$BRANDING_OVERLAYS"; then
+        [[ -d $SCRIPT_DIR/../overlays ]] && log "branding overlay: dimatikan (BRANDING_OVERLAYS=false)"
+        return 0
+    fi
     [[ -d $SCRIPT_DIR/../overlays && -d $P_FS/product ]] || return 0
     for d in "$SCRIPT_DIR"/../overlays/*/; do
         rom=$(basename "$d")
