@@ -8,7 +8,7 @@ Diadaptasi dari repo *TEST-BUILD-Porting-HyperOS-Marble* (port HyperOS -> POCO F
 
 ## Cara kerja
 
-ROM hasil port disusun dari dua ROM:
+ROM hasil port disusun dari dua ROM :
 
 - **Base (ingres):** semua yang terikat hardware: firmware, `boot`, `vendor_boot`, `dtbo`, `vbmeta`, `vendor`, `odm`, `vendor_dlkm`. Bisa salah satu:
   - **OTA ROM AOSP untuk ingres** (zip berisi `payload.bin`, mis. AxionOS ingres). **Disarankan**: vendor-nya memang dibangun untuk framework AOSP dan biasanya sudah membawa RRO ingres.
