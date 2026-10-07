@@ -339,6 +339,23 @@ platform_resign() { # <dir app>; 0 = APK sudah ditandatangani ulang dengan kunci
 }
 
 PORT_CIL_TAG="; [port-base-app]"   # penanda baris CIL tambahan (dibuang lagi kalau compile gagal)
+# domain SELinux app privileged/platform di ROM donor. Android 17 memecah per targetSdk:
+# app yang target SDK <= 36 jalan sebagai platform_app_36 / priv_app_36 (bukan platform_app/priv_app),
+# jadi izin yang hanya diberikan ke platform_app tidak berlaku (GameKeys crash: find touchinjector ditolak)
+app_domains() { # -> daftar type platform_app*/priv_app* donor, dipisah spasi
+    local pfx=(platform_app priv_app) cil f out=""
+    for f in "$P_FS/system/system/etc/selinux/plat_sepolicy.cil" "$P_FS/system_ext/etc/selinux/system_ext_sepolicy.cil" \
+             "$P_FS/product/etc/selinux/product_sepolicy.cil"; do
+        [[ -f $f ]] && cil+=" $f"
+    done
+    if [[ -n ${cil:-} ]]; then
+        # shellcheck disable=SC2086
+        out=$(grep -ohE "^\((type) ($(IFS='|'; echo "${pfx[*]}"))(_[0-9]+)?\)" $cil 2>/dev/null \
+              | sed -E 's/^\(type ([^)]*)\)/\1/' | sort -u | tr '\n' ' ')
+    fi
+    [[ -n ${out// /} ]] || out="${pfx[*]}"
+    echo "${out% }"
+}
 base_app_hal_sepolicy() { # <package>
     local pkg=$1 cil="$P_FS/system_ext/etc/selinux/system_ext_sepolicy.cil" all=() f hal hals label added=""
     case $pkg in
@@ -356,17 +373,19 @@ base_app_hal_sepolicy() { # <package>
         warn "$label: system_ext_sepolicy.cil donor tidak ada, izin HAL tidak ditambahkan (fitur tidak akan berfungsi)"
         return 0
     fi
+    local doms
+    doms=$(app_domains)
     for hal in $hals; do
         if grep -qF "(typeattribute hal_lineage_${hal}_client)" "${all[@]}"; then
-            if ! grep -qF "(typeattributeset hal_lineage_${hal}_client (priv_app platform_app))" "$cil"; then
+            if ! grep -qF "(typeattributeset hal_lineage_${hal}_client ($doms))" "$cil"; then
                 if [[ -n $(tail -c1 "$cil") ]]; then echo >> "$cil"; fi
-                printf '(typeattributeset hal_lineage_%s_client (priv_app platform_app)) %s\n' "$hal" "$PORT_CIL_TAG" >> "$cil"
+                printf '(typeattributeset hal_lineage_%s_client (%s)) %s\n' "$hal" "$doms" "$PORT_CIL_TAG" >> "$cil"
             fi
             added+="$hal "
         fi
     done
     if [[ " $added" == *" ${hals%% *} "* ]]; then
-        ok "$label: priv_app/platform_app jadi client HAL ${added% } di sepolicy system_ext donor"
+        ok "$label: $doms jadi client HAL ${added% } di sepolicy system_ext donor"
     else
         warn "$label: sepolicy donor tidak mengenal HAL vendor.lineage.${hals%% *}, app tersalin tapi kemungkinan tidak berfungsi"
     fi

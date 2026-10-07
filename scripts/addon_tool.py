@@ -2,7 +2,7 @@
 """
 addon_tool.py - helper addon port (kamera MIUI, Dolby).
 
-  addon_tool.py cil TEMPLATE --vendor-cil F --plat-pub F --ver V --tag T [--each NAME=a,b ...]
+  addon_tool.py cil TEMPLATE --vendor-cil F --plat-pub F --ver V --tag T [--each NAME=a,b ...] [--plat-cil F ...]
         resolve {type} di template ke nama di policy vendor (type vendor), atau nama
         berversi (type publik plat, mis. platform_app_202504), atau atribut plat.
         Baris dengan type yang tidak dikenal dibuang (dilaporkan ke stderr).
@@ -39,10 +39,19 @@ def cmd_cil(argv):
     ap.add_argument("--ver", required=True)
     ap.add_argument("--tag", required=True)
     ap.add_argument("--each", action="append", default=[])
+    ap.add_argument("--plat-cil", action="append", default=[],
+                    help="CIL system/system_ext donor: type yang hanya ada di sana dipakai apa adanya "
+                         "(mis. platform_app_36 Android 17, tidak punya versi di plat_pub_versioned)")
     a = ap.parse_args(argv)
 
     vend = set(TYPE_DECL.findall(open(a.vendor_cil, encoding="utf-8", errors="replace").read()))
     pub = set(TYPE_DECL.findall(open(a.plat_pub, encoding="utf-8", errors="replace").read()))
+    plat = set()
+    for f in a.plat_cil:
+        try:
+            plat |= set(TYPE_DECL.findall(open(f, encoding="utf-8", errors="replace").read()))
+        except OSError:
+            pass
     suffix = "_" + a.ver.replace(".", "_")
     tmpl = open(a.template, encoding="utf-8").read()
     # type/atribut baru yang dideklarasikan template sendiri
@@ -53,7 +62,7 @@ def cmd_cil(argv):
             return name
         if name + suffix in pub:
             return name + suffix
-        if name in pub:
+        if name in pub or name in plat:
             return name
         return None
 

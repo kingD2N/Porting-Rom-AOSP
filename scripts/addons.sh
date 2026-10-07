@@ -121,15 +121,19 @@ addon_sepolicy() { # template [--each NAME=a,b]...
         return 1
     fi
     out="$WORK/addons/$(basename "$(dirname "$tmpl")").cil"
+    local pc=() f
+    for f in "$P_FS/system/system/etc/selinux/plat_sepolicy.cil" "$P_FS/system_ext/etc/selinux/system_ext_sepolicy.cil" \
+             "$P_FS/product/etc/selinux/product_sepolicy.cil"; do
+        [[ -f $f ]] && pc+=(--plat-cil "$f")
+    done
     python3 "$SCRIPT_DIR/addon_tool.py" cil "$tmpl" --vendor-cil "$vs/vendor_sepolicy.cil" \
-        --plat-pub "$vs/plat_pub_versioned.cil" --ver "$ver" --tag "$ADDON_CIL_TAG" "$@" \
+        --plat-pub "$vs/plat_pub_versioned.cil" --ver "$ver" --tag "$ADDON_CIL_TAG" "${pc[@]}" "$@" \
         > "$out" 2> "$out.log" || { warn "addon: template sepolicy $tmpl gagal diproses"; return 1; }
     if [[ -s $out.log ]]; then sed 's/^/    sepolicy /' "$out.log"; fi
     addon_backup "$vs/vendor_sepolicy.cil"
     if [[ -n $(tail -c1 "$vs/vendor_sepolicy.cil") ]]; then echo >> "$vs/vendor_sepolicy.cil"; fi
     cat "$out" >> "$vs/vendor_sepolicy.cil"
     # policy precompiled vendor (kalau ada) tidak memuat baris baru -> buang, init compile ulang saat boot
-    local f
     for f in "$vs"/precompiled_sepolicy*; do
         [[ -e $f ]] || continue
         addon_backup "$f"; rm -f "$f"; log "  addon: ${f#"$B_FS"/} dibuang (sepolicy vendor berubah, init compile ulang)"
@@ -276,7 +280,9 @@ addon_miuicamera() {
     rels+=(system/priv-app/MiuiCamera system/priv-app/MiuiCamera/MiuiCamera.apk system/etc/public.libraries-xiaomi.txt
            system/etc/permissions/privapp-permissions-miuicamera.xml system/etc/sysconfig/miuicamera-hiddenapi-package-allowlist.xml)
     addon_ctx "$P_FS" system "${rels[@]}" || true
-    addon_sepolicy "$ADDON_DATA_DIR/miuicamera/sepolicy.cil" --each APP=platform_app,priv_app || {
+    local appdoms
+    appdoms=$(app_domains); appdoms=${appdoms// /,}
+    addon_sepolicy "$ADDON_DATA_DIR/miuicamera/sepolicy.cil" --each "APP=$appdoms" || {
         warn "addon MiuiCamera: sepolicy kamera tidak bisa ditambahkan -> dibatalkan"; addon_rollback; return 1; }
     ADDON_DONE+=(miuicamera)
     ok "addon MiuiCamera terpasang (system/priv-app/MiuiCamera, $(du -sm "$sys/priv-app/MiuiCamera" | cut -f1) MB). Aperture tetap ada sebagai cadangan"
@@ -359,7 +365,7 @@ addon_dolby() {
         set_prop "$vend/build.prop" vendor.audio.dolby.ds2.enabled false
         # sepolicy + contexts runtime
         addon_sepolicy "$ADDON_DATA_DIR/dolby/sepolicy.cil" \
-            --each CLIENT=audioserver,hal_audio_default,mediacodec,platform_app,priv_app,system_server || {
+            --each "CLIENT=audioserver,hal_audio_default,mediacodec,system_server,$(app_domains | tr ' ' ',')" || {
             warn "addon Dolby: sepolicy tidak bisa ditambahkan -> dibatalkan"; addon_rollback; return 1; }
         addon_append_line "$vend/etc/selinux/vendor_file_contexts" '/(vendor|system/vendor)/bin/hw/vendor\.dolby\.hardware\.dms@2\.0-service u:object_r:hal_dms_default_exec:s0'
         addon_append_line "$vend/etc/selinux/vendor_file_contexts" '/data/vendor/dolby(/.*)? u:object_r:vendor_data_file:s0'
