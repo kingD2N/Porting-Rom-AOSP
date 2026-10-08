@@ -6,7 +6,7 @@ Diadaptasi dari repo *TEST-BUILD-Porting-HyperOS-Marble* (port HyperOS -> POCO F
 
 > **TEST build.** Port lintas device selalu berisiko bootloop atau fitur mati. Backup dulu (mis. pakai modul backup partisi), dan pastikan bisa balik ke ROM sebelumnya lewat OrangeFox.
 
-## Cara kerja
+## Cara kerja 
 
 ROM hasil port disusun dari dua ROM:
 
