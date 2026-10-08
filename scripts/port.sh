@@ -73,6 +73,13 @@ RECOVERY_IMG=${RECOVERY_IMG:-}              # opsional: URL/path recovery.img cu
 BOOT_IMG=${BOOT_IMG:-}                      # opsional: URL/path boot.img custom (kernel), menggantikan boot.img base
 ROM_MAINTAINER=${ROM_MAINTAINER-KingD2N}     # identitas build ROM port: maintainer (kosong = tidak diubah)
 ROM_RELEASE_TYPE=${ROM_RELEASE_TYPE:-UNOFFICIAL} # OFFICIAL di prop versi/jenis rilis ROM donor diganti ini
+# spesifikasi device di Tentang ponsel (prop teks yang diisi ROM donor dengan data HP donor, mis. AxionOS
+# persist.sys.axion_cpu_info). Default = POCO F4 GT / Redmi K50 Gaming (ingres). Kosong = tidak diubah.
+DEVICE_SPEC_CPU=${DEVICE_SPEC_CPU-Snapdragon 8 Gen 1}
+DEVICE_SPEC_CAMERA_REAR=${DEVICE_SPEC_CAMERA_REAR-64MP + 8MP + 2MP}
+DEVICE_SPEC_CAMERA_FRONT=${DEVICE_SPEC_CAMERA_FRONT-20MP}
+DEVICE_SPEC_BATTERY=${DEVICE_SPEC_BATTERY-4700 mAh}
+DEVICE_SPEC_SCREEN=${DEVICE_SPEC_SCREEN-1080 x 2400}
 GBOARD_APK=${GBOARD_APK:-}                  # opsional: URL/path Gboard (LatinImeGoogle.apk) -> jadi keyboard sistem
 GBOARD_DIR=${GBOARD_DIR:-product/app/LatinImeGoogle}
 GBOARD_PACKAGE=${GBOARD_PACKAGE:-com.google.android.inputmethod.latin}   # package yang diharapkan dari GBOARD_APK
@@ -713,15 +720,20 @@ merge_device_props() {
 # ROM hasil port bukan rilis official maintainer donor: maintainer -> ROM_MAINTAINER, OFFICIAL ->
 # ROM_RELEASE_TYPE di build.prop system/system_ext/product (dipakai halaman "Tentang ponsel" ROM)
 rom_branding() {
-    local f files=() res
-    [[ -n $ROM_MAINTAINER ]] || { log "branding: ROM_MAINTAINER kosong, identitas build donor tidak diubah"; return 0; }
+    local f files=() res nm no ns
     for f in "${PORT_PROP_FILES[@]}"; do [[ -f $P_FS/$f ]] && files+=("$P_FS/$f"); done
     [[ ${#files[@]} -gt 0 ]] || return 0
-    res=$(python3 "$SCRIPT_DIR/rom_branding.py" --maintainer "$ROM_MAINTAINER" --type "$ROM_RELEASE_TYPE" "${files[@]}")
+    # spesifikasi device (prosesor, kamera, ...) selalu disesuaikan, maintainer hanya kalau ROM_MAINTAINER diisi
+    res=$(python3 "$SCRIPT_DIR/rom_branding.py" --maintainer "$ROM_MAINTAINER" --type "${ROM_MAINTAINER:+$ROM_RELEASE_TYPE}" \
+        --cpu "$DEVICE_SPEC_CPU" --camera-rear "$DEVICE_SPEC_CAMERA_REAR" --camera-front "$DEVICE_SPEC_CAMERA_FRONT" \
+        --battery "$DEVICE_SPEC_BATTERY" --screen "$DEVICE_SPEC_SCREEN" "${files[@]}")
     grep -v '^RESULT' <<< "$res" | sed "s|$P_FS/||; s/^/    /" || true
-    res=$(sed -n 's/^RESULT //p' <<< "$res")
-    if [[ ${res%% *} -gt 0 ]]; then ok "branding: maintainer -> $ROM_MAINTAINER (${res%% *} prop), $ROM_RELEASE_TYPE (${res#* } prop)"
-    else warn "branding: ROM donor tidak punya prop maintainer (ro.<rom>.maintainer); teks maintainer di Tentang ponsel mungkin berasal dari resource app dan tidak berubah. $ROM_RELEASE_TYPE: ${res#* } prop"; fi
+    read -r nm no ns <<< "$(sed -n 's/^RESULT //p' <<< "$res")"
+    if [[ ${ns:-0} -gt 0 ]]; then ok "branding: spesifikasi device di Tentang ponsel -> $TARGET_DEVICE ($ns prop)"; fi
+    if [[ -z $ROM_MAINTAINER ]]; then
+        log "branding: ROM_MAINTAINER kosong, maintainer donor tidak diubah"
+    elif [[ ${nm:-0} -gt 0 ]]; then ok "branding: maintainer -> $ROM_MAINTAINER ($nm prop), $ROM_RELEASE_TYPE (${no:-0} prop)"
+    else warn "branding: ROM donor tidak punya prop maintainer (ro.<rom>.maintainer / persist.sys.*maintainer); teks maintainer di Tentang ponsel mungkin berasal dari resource app dan tidak berubah. $ROM_RELEASE_TYPE: ${no:-0} prop"; fi
     branding_overlays
 }
 

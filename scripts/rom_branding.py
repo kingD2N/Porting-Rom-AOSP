@@ -2,7 +2,8 @@
 """
 rom_branding.py - ubah identitas build ROM donor di build.prop: maintainer & status official.
 
-  rom_branding.py --maintainer NAMA --type UNOFFICIAL PROPFILE...
+  rom_branding.py --maintainer NAMA --type UNOFFICIAL [--cpu X] [--camera-rear X] [--camera-front X]
+                  [--battery X] [--screen X] PROPFILE...
 
 - prop maintainer ROM (ro.<rom>.maintainer, ro.<rom>.build.maintainer, ...) -> NAMA; prop data
   maintainer lama lainnya (ro.<rom>.maintainer.photo/.github/.telegram/... ) dikosongkan
@@ -10,13 +11,26 @@ rom_branding.py - ubah identitas build ROM donor di build.prop: maintainer & sta
   bernilai OFFICIAL -> UNOFFICIAL (ro.build.type = user/userdebug TIDAK disentuh)
 - kata OFFICIAL di nilai prop versi/nama tampilan (mis. ro.afterlife.version=8.4-Ophelia-OFFICIAL_...)
   -> UNOFFICIAL. Prop fingerprint/description tidak disentuh.
+- prop spesifikasi device di halaman Tentang ponsel yang diisi build ROM donor dengan data HP donor
+  (mis. AxionOS: persist.sys.axion_cpu_info, persist.sys.device_camera_info_rear/front) -> data device
+  target. Hanya prop yang sudah ada di donor yang diubah; tidak ada prop baru.
+Prop maintainer juga dikenali di persist.sys.* (AxionOS: persist.sys.axion_maintainer).
 Huruf besar-kecil mengikuti aslinya (OFFICIAL/Official/official).
 Output: satu baris per perubahan "file: key: lama -> baru", lalu "RESULT <maintainer> <official>".
 """
 import argparse
 import re
 
-MAINT_KEY = re.compile(r'^ro\.(?!build\.|product\.|system\.|vendor\.|odm\.)[a-z0-9_.]*maintainer[a-z0-9_.]*$', re.I)
+MAINT_KEY = re.compile(r'^(?:ro|persist\.sys)\.(?!build\.|product\.|system\.|vendor\.|odm\.)[a-z0-9_.]*maintainer[a-z0-9_.]*$', re.I)
+# prop teks spesifikasi (bukan prop hardware asli seperti ro.soc.model/ro.board.platform)
+SPEC_PREFIX = re.compile(r'^(?:ro|persist\.sys)\.(?!soc\.|board\.|hardware|product\.|build\.|vendor\.|odm\.|boot\.)', re.I)
+SPEC_KEYS = (
+    ("cpu", re.compile(r'(?:cpu[._]?info|cpu[._]name|cpu[._]model|processor|chipset|soc[._]name)$', re.I)),
+    ("camera_rear", re.compile(r'camera[._]?info[._](?:rear|back|main)$|(?:rear|back)[._]camera[._]?info$', re.I)),
+    ("camera_front", re.compile(r'camera[._]?info[._](?:front|selfie)$|front[._]camera[._]?info$', re.I)),
+    ("battery", re.compile(r'battery[._]?(?:info|capacity)$', re.I)),
+    ("screen", re.compile(r'(?:screen|display)[._]?(?:info|resolution)$', re.I)),
+)
 TYPE_KEY = re.compile(r'^ro\.(?!build\.|product\.|system\.|vendor\.|odm\.|system_ext\.)[a-z0-9_]+\.'
                       r'(?:[a-z0-9_]+\.)*(?:releasetype|release_type|release\.type|build\.type|buildtype|build_type|type)$', re.I)
 EXTRA_KEY = re.compile(r'photo|avatar|image|picture|pic|icon|github|git|telegram|tg|facebook|fb|instagram|insta|ig|'
@@ -38,9 +52,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--maintainer", default="")
     ap.add_argument("--type", default="UNOFFICIAL")
+    for k, _ in SPEC_KEYS:
+        ap.add_argument("--" + k.replace("_", "-"), default="")
     ap.add_argument("files", nargs="+")
     a = ap.parse_args()
-    nm = no = 0
+    nm = no = ns = 0
+    spec = {k: getattr(a, k) for k, _ in SPEC_KEYS}
     for f in a.files:
         try:
             lines = open(f, encoding="utf-8", errors="surrogateescape").read().split("\n")
@@ -53,15 +70,22 @@ def main():
             k, v = line.split("=", 1)
             k = k.strip()
             nv = v
-            if a.maintainer and MAINT_KEY.match(k):
+            kind = None
+            if SPEC_PREFIX.match(k) and "maintainer" not in k.lower():
+                kind = next((n for n, rx in SPEC_KEYS if rx.search(k)), None)
+            if kind and spec.get(kind) and v.strip() and v.strip().lower() not in ("true", "false", "0", "1"):
+                nv = spec[kind]
+                if nv != v:
+                    ns += 1
+            elif a.maintainer and MAINT_KEY.match(k):
                 # data maintainer lama selain nama (foto, link sosial media, donasi) dikosongkan
                 nv = "" if EXTRA_KEY.search(k.split("maintainer", 1)[-1]) else a.maintainer
                 if nv != v:
                     nm += 1
-            elif TYPE_KEY.match(k) and v.strip().lower() == "official":
+            elif a.type and TYPE_KEY.match(k) and v.strip().lower() == "official":
                 nv = unofficial(v.strip(), a.type)
                 no += 1
-            elif not SKIP_KEY.search(k) and WORD.search(v):
+            elif a.type and not SKIP_KEY.search(k) and WORD.search(v):
                 nv = WORD.sub(lambda m: unofficial(m.group(1), a.type), v)
                 if nv != v:
                     no += 1
@@ -71,7 +95,7 @@ def main():
                 changed = True
         if changed:
             open(f, "w", encoding="utf-8", errors="surrogateescape").write("\n".join(lines))
-    print("RESULT %d %d" % (nm, no))
+    print("RESULT %d %d %d" % (nm, no, ns))
     return 0
 
 
