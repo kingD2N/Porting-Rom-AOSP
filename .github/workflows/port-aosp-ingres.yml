@@ -6,7 +6,7 @@ on:
       base_rom_url:
         description: "URL ROM base ingres: OTA AOSP ingres (.zip payload.bin) / fastboot MIUI-HyperOS (.tgz) / zip xiaomi.eu"
         required: true
-        default: "https://github.com/Ingres-Centre/LineageOS-Releases/releases/download/20260914/lineage-23.2-20260914-UNOFFICIAL-ingres.zip"
+        default: "https://drive.usercontent.google.com/download?id=19XLetcbdi3NvFqiVVhuuKej5ID4PHFhs&export=download&authuser=0&confirm=t&uuid=c7140f46-5b76-40f0-87e0-8757b652ea5a&at=AMrWOn2gHfTN8gxtADQLIJUg4Roh%3A1791635804060"
         type: string
       port_rom_url:
         description: "URL OTA ROM AOSP donor (.zip berisi payload.bin). Ideal: device SM8450 (taro), basis sama dengan base"
