@@ -352,8 +352,16 @@ collect_images() { # src_tree dst pfx
         awk '{printf "    %10.1f MB  %s\n", $1/1048576, $2}'
     dir=$(dirname "$(find "$src" -type f -name 'boot.img' | head -n1)")
     [[ -d $dir && $dir != . ]] || die "[$pfx] boot.img / folder images tidak ditemukan di ROM"
-    f=$(find "$src" -maxdepth 3 -name 'flash_all*.sh' | head -n1)
+    # skrip flash: fastboot ROM Xiaomi (flash_all.sh) atau zip gaya xiaomi.eu / ROM custom
+    # (mis. RYUUI: linux_fastboot_update_rom.sh / linux_fastboot_first_install_with_data_format.sh)
+    local pat
+    f=""
+    for pat in 'flash_all.sh' 'flash_all*.sh' '*fastboot_update_rom.sh' '*fastboot_first_install*.sh'; do
+        f=$(find "$src" -maxdepth 3 -name "$pat" | sort | head -n1)
+        [[ -z $f ]] || break
+    done
     if [[ -n $f ]]; then
+        log "[$pfx] skrip flash acuan: ${f#"$src"/}"
         anti=$(grep -oE 'CURRENT_ANTI_VER=[0-9]+' "$f" | head -n1 | cut -d= -f2 || true)
         if [[ -n $anti ]]; then echo "ANTI_VER=$anti" >> "$WORK/${pfx}.env"; fi
         # partisi yang benar-benar di-flash flash_all.sh (fastboot $* flash abl_ab ...) -> whitelist
@@ -362,7 +370,7 @@ collect_images() { # src_tree dst pfx
             | sed -E 's/_(ab|a|b)$//' | sort -u | tr '\n' ' ' || true)
         if [[ -n ${fparts// /} ]]; then
             echo "FLASHALL_PARTS=\"$fparts\"" >> "$WORK/${pfx}.env"
-            log "[$pfx] flash_all.sh mem-flash: $fparts"
+            log "[$pfx] $(basename "$f") mem-flash: $fparts"
         fi
     fi
     # simpan META-INF (installer recovery) ROM base untuk INSTALLER=base
@@ -1659,7 +1667,7 @@ prune_base_images() {
             rm -f "$f"; log "tidak di-flash: $p.img (NEVER_FLASH)"; continue
         fi
         if [[ -n ${FLASHALL_PARTS:-} ]] && ! in_list "$p" "$FLASHALL_PARTS $keep_always"; then
-            rm -f "$f"; log "tidak di-flash: $p.img (tidak ada di flash_all.sh base)"
+            rm -f "$f"; log "tidak di-flash: $p.img (tidak ada di skrip flash base)"
         fi
     done
 }
