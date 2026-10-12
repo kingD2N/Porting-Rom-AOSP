@@ -20,6 +20,13 @@ addon_tool.py - helper addon port (kamera MIUI, Dolby).
         salin library dengan string SONAME diganti (panjang NEW <= OLD, sisa diisi NUL).
   addon_tool.py lfs POINTER
         cetak "<sha256> <size>" dari pointer git-lfs (kosong kalau bukan pointer).
+  addon_tool.py cilpick SRC_CIL --match WORD --donor F... --have F... --tag T
+        ambil policy satu fitur (mis. wfd) dari CIL hasil build ROM lain (system_ext base) jadi
+        potongan CIL yang aman ditambahkan ke policy donor: type/roletype fitur, keanggotaan
+        atribut standar (hanya type fitur), allow/allowx/dontaudit/typetransition yang semua
+        type-nya dikenal. neverallow & atribut buatan compiler (base_typeattr_*) tidak diambil.
+        --donor = CIL plat/system_ext/product ROM port, --have = CIL lain yang ikut di-compile
+        (vendor, plat_pub_versioned, odm). exit 3 = donor sudah punya policy fitur itu.
 """
 import os
 import re
@@ -267,12 +274,92 @@ def cmd_lfs(argv):
     return 0
 
 
+IDENT = re.compile(r'[A-Za-z_][A-Za-z0-9_.]*')
+
+
+def _cil_types(files):
+    out = set()
+    for f in files:
+        try:
+            t = open(f, encoding="utf-8", errors="replace").read()
+        except OSError:
+            continue
+        out |= set(TYPE_DECL.findall(t))
+        out |= set(re.findall(r'^\((?:attribute)\s+([A-Za-z0-9_.]+)\)', t, re.M))
+    return out
+
+
+def cmd_cilpick(argv):
+    import argparse
+    ap = argparse.ArgumentParser(prog="addon_tool.py cilpick")
+    ap.add_argument("src")
+    ap.add_argument("--match", required=True)
+    ap.add_argument("--donor", action="append", default=[],
+                    help="CIL milik ROM port (plat/system_ext/product): type yang sudah ada di sini dianggap lengkap")
+    ap.add_argument("--have", action="append", default=[],
+                    help="CIL lain yang ikut di-compile (vendor, plat_pub_versioned, odm): type cukup sudah dideklarasikan")
+    ap.add_argument("--tag", required=True)
+    a = ap.parse_args(argv)
+    donor = _cil_types(a.donor) | {"self"}
+    known = donor | _cil_types(a.have)
+    lines = [l.strip() for l in open(a.src, encoding="utf-8", errors="replace") if a.match in l]
+    feat = [m.group(1) for m in (re.match(r'^\(type ([A-Za-z0-9_.]+)\)$', l) for l in lines) if m]
+    if not feat:
+        print("tidak ada type %s di %s" % (a.match, a.src), file=sys.stderr)
+        return 3
+    if all(t in donor for t in feat):
+        print("policy %s sudah ada di ROM donor" % a.match, file=sys.stderr)
+        return 3
+    own = {t for t in feat if t not in donor}          # type fitur yang policy-nya belum ada di donor
+    allk = known | own
+    out, drop = [], []
+    for t in feat:
+        if t not in known:
+            out.append("(type %s)" % t)
+    for l in lines:
+        if l.startswith(";") or l.startswith("(neverallow") or "base_typeattr_" in l or l.startswith("(type "):
+            continue
+        m = re.match(r'^\(roletype object_r ([A-Za-z0-9_.]+)\)$', l)
+        if m:
+            if m.group(1) in own:
+                out.append(l)
+            continue
+        m = re.match(r'^\(typeattributeset ([A-Za-z0-9_.]+) \((.*)\)\)$', l)
+        if m:
+            attr, body = m.group(1), m.group(2)
+            if "(" in body or attr not in known:
+                drop.append(l[:120])
+                continue
+            mem = [t for t in body.split() if t in own]
+            if mem:
+                out.append("(typeattributeset %s (%s))" % (attr, " ".join(mem)))
+            continue
+        m = re.match(r'^\((allow|allowx|dontaudit|auditallow|typetransition) ([A-Za-z0-9_.]+) ([A-Za-z0-9_.]+) ', l)
+        if not m:
+            drop.append(l[:120])
+            continue
+        kind, src, tgt = m.groups()
+        names = [src, tgt]
+        if kind == "typetransition":
+            names += re.findall(r'([A-Za-z0-9_.]+)\)$', l)
+        miss = [n for n in names if n not in allk]
+        if miss:
+            drop.append("%s (type tidak ada: %s)" % (l[:120], ", ".join(miss)))
+            continue
+        out.append(l)
+    for l in out:
+        print("%s %s" % (l, a.tag))
+    for d in drop:
+        print("dibuang: " + d, file=sys.stderr)
+    return 0
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
         return 1
     cmds = {"cil": cmd_cil, "ctx": cmd_ctx, "effects": cmd_effects, "allowlist": cmd_allowlist,
-            "soname": cmd_soname, "lfs": cmd_lfs}
+            "soname": cmd_soname, "lfs": cmd_lfs, "cilpick": cmd_cilpick}
     c = cmds.get(sys.argv[1])
     if not c:
         print(__doc__)

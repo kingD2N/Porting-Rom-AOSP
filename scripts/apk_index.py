@@ -8,6 +8,7 @@ tanpa aapt. Dipakai untuk debloat berdasarkan nama package.
   apk_index.py --info <file>   -> "<package>\t<sharedUserId atau ->" satu APK
   apk_index.py --perms <file>  -> nama <uses-permission> satu APK, satu per baris
   apk_index.py --libs <file>   -> "<nama>\t<required true/false>" untuk tiap <uses-library>
+  apk_index.py --sdk <file>    -> "<minSdkVersion> <targetSdkVersion>" (0 kalau tidak ada)
 """
 import os
 import struct
@@ -143,6 +144,17 @@ def main():
     if len(sys.argv) == 3 and sys.argv[1] == "--info":
         a = apk_info(sys.argv[2])
         print("%s\t%s" % (a.get("package", ""), a.get("sharedUserId") or "-"))
+        return
+    if len(sys.argv) == 3 and sys.argv[1] == "--sdk":
+        mn = tg = 0
+        for el, at in apk_elements(sys.argv[2]):
+            if el == "uses-sdk":
+                v = at.get("minSdkVersion", 0)
+                mn = int(v) if isinstance(v, int) or str(v).isdigit() else 0
+                v = at.get("targetSdkVersion", 0)
+                tg = int(v) if isinstance(v, int) or str(v).isdigit() else 0
+                break
+        print("%d %d" % (mn, tg))
         return
     if len(sys.argv) == 3 and sys.argv[1] in ("--perms", "--libs"):
         seen = set()

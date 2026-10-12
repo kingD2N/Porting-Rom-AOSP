@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       base_rom_url:
-        description: "URL ROM base ingres: OTA AOSP ingres (.zip payload.bin) / fastboot MIUI-HyperOS (.tgz) / zip xiaomi.eu"
+        description: "URL ROM base ingres: OTA AOSP ingres (.zip payload.bin) / fastboot MIUI-HyperOS (.tgz) / zip xiaomi.eu. Donor Android 13 = base MIUI 14 ingres"
         required: true
         default: "https://drive.usercontent.google.com/download?id=19XLetcbdi3NvFqiVVhuuKej5ID4PHFhs&export=download&authuser=0&confirm=t&uuid=c7140f46-5b76-40f0-87e0-8757b652ea5a&at=AMrWOn2gHfTN8gxtADQLIJUg4Roh%3A1791635804060"
         type: string
@@ -46,9 +46,9 @@ on:
         default: true
         type: boolean
       addons:
-        description: "Addon (pisah spasi): miuicamera = MIUI Camera ingres, dolby = Dolby Atmos (DAX), touchrate = sampling sentuh tinggi sejak boot. Kosong/none = tanpa addon"
+        description: "Addon (pisah spasi): miuicamera, dolby, touchrate, wfd (cast layar), hotword (Hey Google DSP). Dicek per versi Android. Kosong/none = tanpa addon"
         required: false
-        default: "miuicamera dolby touchrate"
+        default: "miuicamera dolby touchrate wfd hotword"
         type: string
       dolby_ui:
         description: "UI Dolby (addon dolby): lunaris = Lunaris Dolby (donor test-key AOSP / donor yang sudah punya Lunaris), selain itu otomatis DaxUI | dax = selalu DaxUI"

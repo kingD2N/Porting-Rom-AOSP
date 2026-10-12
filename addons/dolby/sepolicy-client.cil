@@ -1,0 +1,10 @@
+; Dolby: HAL dms sudah ada di vendor base (mis. stock MIUI 14 / HyperOS ingres) -> hanya izin client
+; untuk UI Dolby (DaxUI/daxService/Lunaris) & system_server. Type HAL diambil dari policy vendor base;
+; baris yang type-nya tidak ada di vendor dibuang otomatis (vendor tanpa policy hal_dms = tidak ada baris).
+(typeattributeset halclientdomain ({CLIENT}))
+(typeattributeset {hal_dms_client} ({CLIENT}))
+(allow {CLIENT} {hal_dms_hwservice} (hwservice_manager (find)))
+(allow {CLIENT} {hal_dms_server} (binder (call transfer)))
+(allow {hal_dms_server} {CLIENT} (binder (call transfer)))
+(allow {CLIENT} {hal_dms_server} (fd (use)))
+(allow {hal_dms_server} {CLIENT} (fd (use)))

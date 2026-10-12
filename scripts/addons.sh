@@ -8,6 +8,9 @@
 #  dolby      : Dolby Atmos DAX (Gurinbone/hardware_dolby) -> HAL vendor.dolby.hardware.dms@2.0,
 #               efek audio (dap, volume leveler, game, vqe), UI DaxUI + daxService.
 #  touchrate  : mode laporan sentuh tinggi panel (bump_sample_rate touchfeature Xiaomi = 1) sejak boot.
+#  hotword    : "Hey Google" lewat DSP (HotwordEnrollment Google HEXAGON) dari ROM base, untuk donor GApps.
+#  wfd        : Cast layar / Wireless display Qualcomm (WfdService + wfdservice + WfdCommon.jar) dari
+#               ROM base LineageOS ingres, untuk donor yang framework-nya punya hook ExtendedRemoteDisplay.
 #
 #  Semua addon: bahan di-stage dulu, dependensi library dicek terhadap ROM hasil port.
 #  Kalau ada yang kurang -> addon dilewati (ROM tetap aman, hanya tanpa fitur itu).
@@ -15,7 +18,7 @@
 #  karena addon, seluruh addon dibatalkan (addon_rollback) supaya tidak bootloop.
 # =============================================================================
 
-ADDONS=${ADDONS-"miuicamera dolby touchrate"}   # kosong = tanpa addon
+ADDONS=${ADDONS-"miuicamera dolby touchrate wfd hotword"}   # kosong = tanpa addon
 ADDON_CIL_TAG="; [port-addon]"
 ADDON_DATA_DIR=${ADDON_DATA_DIR:-$SCRIPT_DIR/../addons}
 MIUICAMERA_DEVICE_REPO=${MIUICAMERA_DEVICE_REPO:-https://github.com/Gurinbone/android_device_xiaomi_miuicamera-ingres}
@@ -128,7 +131,7 @@ addon_sepolicy() { # template [--each NAME=a,b]...
         [[ -f $f ]] && pc+=(--plat-cil "$f")
     done
     python3 "$SCRIPT_DIR/addon_tool.py" cil "$tmpl" --vendor-cil "$vs/vendor_sepolicy.cil" \
-        --plat-pub "$vs/plat_pub_versioned.cil" --ver "$ver" --tag "$ADDON_CIL_TAG" "${pc[@]}" "$@" \
+        --plat-pub "$vs/plat_pub_versioned.cil" --ver "$ver" --tag "$ADDON_CIL_TAG $ADDON_CUR" "${pc[@]}" "$@" \
         > "$out" 2> "$out.log" || { warn "addon: template sepolicy $tmpl gagal diproses"; return 1; }
     if [[ -s $out.log ]]; then sed 's/^/    sepolicy /' "$out.log"; fi
     addon_backup "$vs/vendor_sepolicy.cil"
@@ -298,10 +301,15 @@ addon_dolby() {
     rm -rf "$d"; mkdir -p "$d"
     addon_clone "$DOLBY_REPO" "$DOLBY_BRANCH" "$d/src" || return 1
     src="$d/src/proprietary"
-    local have_hal=false
-    if [[ -e $vend/bin/hw/vendor.dolby.hardware.dms@2.0-service ]]; then
+    local have_hal=false hal_bin
+    hal_bin=$(find "$vend/bin/hw" -maxdepth 1 -name 'vendor.dolby*.hardware.dms*-service' 2>/dev/null | head -n1 || true)
+    if [[ -n $hal_bin ]]; then
         have_hal=true
-        log "  vendor base sudah punya HAL Dolby (dms@2.0) -> hanya UI yang dipasang"
+        log "  vendor base sudah punya HAL Dolby ($(basename "$hal_bin")) -> HAL & efek vendor dipakai, hanya UI yang dipasang"
+    elif [[ -n ${BASE_SDK:-} && $BASE_SDK -lt 34 ]]; then
+        # blob Dolby repo disiapkan untuk vendor LineageOS 23 (Android 16); vendor Android 13 tanpa
+        # HAL Dolby: tetap dicoba, cek dependensi library + secilc yang memutuskan
+        log "  vendor base Android $(android_name "$BASE_SDK") tanpa HAL Dolby: blob HAL dari repo dicoba (dicek library & sepolicy)"
     fi
 
     if ! is_true "$have_hal"; then
@@ -373,6 +381,13 @@ addon_dolby() {
         addon_append_line "$vend/etc/selinux/vendor_hwservice_contexts" 'vendor.dolby.hardware.dms::IDms u:object_r:hal_dms_hwservice:s0'
     fi
 
+    if is_true "$have_hal" && grep -qE '^\((typeattribute|type) hal_dms_(client|server)\)' "$vend/etc/selinux/vendor_sepolicy.cil" 2>/dev/null; then
+        # HAL bawaan vendor base: policy vendor belum tentu mengizinkan app UI Dolby ROM port jadi client
+        addon_sepolicy "$ADDON_DATA_DIR/dolby/sepolicy-client.cil" \
+            --each "CLIENT=system_server,$(app_domains | tr ' ' ',')" \
+            || warn "addon Dolby: izin client HAL Dolby vendor tidak bisa ditambahkan (UI mungkin tidak bisa mengatur efek)"
+    fi
+
     # UI: DaxUI + daxService (LunarisDolby hanya ada sebagai source Kotlin/Compose, butuh build AOSP)
     if [[ ! -d $se ]]; then
         warn "addon Dolby: system_ext donor tidak diekstrak -> UI Dolby tidak dipasang"
@@ -406,6 +421,7 @@ addon_dolby() {
         for x in $apps; do
             app=${x%%:*}; pkg=${x#*:}
             if grep -qxF "$pkg" <<< "$donor_pkgs"; then log "  $pkg sudah ada di ROM donor, tidak disalin"; continue; fi
+            apk_sdk_ok "$src/system_ext/priv-app/$app/$app.apk" "$app" || continue
             mkdir -p "$d/stage/se/priv-app/$app"
             cp "$src/system_ext/priv-app/$app/$app.apk" "$d/stage/se/priv-app/$app/"
             rc=0; addon_sign "$d/stage/se/priv-app/$app" || rc=$?
@@ -452,6 +468,7 @@ addon_lunaris() { # workdir
     pkg=$(python3 "$SCRIPT_DIR/apk_index.py" --info "$apk" 2>/dev/null || true)
     uid=${pkg#*$'\t'}; pkg=${pkg%%$'\t'*}
     if [[ $pkg != "$LUNARIS_DOLBY_PKG" ]]; then warn "addon Dolby: APK Lunaris berisi package '$pkg', bukan $LUNARIS_DOLBY_PKG"; return 1; fi
+    apk_sdk_ok "$apk" "Lunaris Dolby" || return 1
     # APK system yang di-dexpreopt sering tanpa classes.dex (oat-nya terikat framework ROM asal) -> tidak bisa dipakai
     if ! python3 -c 'import sys,zipfile; sys.exit(0 if "classes.dex" in zipfile.ZipFile(sys.argv[1]).namelist() else 1)' "$apk"; then
         warn "addon Dolby: APK Lunaris tanpa classes.dex (dex di-strip saat build ROM asal), tidak bisa dipakai di ROM lain"
@@ -476,9 +493,213 @@ addon_lunaris() { # workdir
     return 0
 }
 
-# batalkan addon: tanpa argumen = addon yang sedang dipasang ($ADDON_CUR), "all" = semua addon
-# (dipanggil sepolicy_compile_check kalau sepolicy gabungan gagal di-compile karena baris addon).
-# Urutan mundur: file baru dihapus, file yang diubah dikembalikan ke keadaan sebelum addon.
+# ------------------------------------------------------------------ "Hey Google" (hotword DSP)
+# HotwordEnrollment{X,Y}Google<DSP> = app pendaftaran suara "Ok Google"/"Hey Google" yang memakai
+# sound trigger HAL vendor (deteksi di DSP Hexagon, hemat baterai saat layar mati). Diambil dari
+# product ROM base (LineageOS ingres membawanya dari blob vendor), butuh Google app di ROM donor.
+addon_hotword() {
+    local bp="$B_FS/product" bse="$B_FS/system_ext" pp="$P_FS/product" se="$P_FS/system_ext" donor_pkgs
+    local a n apk prels=() srels=() f lib=com.android.hotwordenrollment.common.util apps=()
+    ADDON_CUR=hotword
+    while IFS= read -r a; do apps+=("$a"); done < <(find "$bp/priv-app" "$bp/app" -mindepth 1 -maxdepth 1 -type d -name 'HotwordEnrollment*' 2>/dev/null | sort)
+    if [[ ${#apps[@]} -eq 0 ]]; then warn "addon hotword: product base tidak punya HotwordEnrollment*, dilewati"; return 1; fi
+    donor_pkgs=$(python3 "$SCRIPT_DIR/apk_index.py" "$P_FS" | cut -f1 || true)
+    if ! grep -qxF com.google.android.googlequicksearchbox <<< "$donor_pkgs"; then
+        warn "addon hotword dilewati: ROM donor tanpa Google app (varian vanilla/tanpa GApps), \"Hey Google\" tidak bisa dipakai"
+        return 1
+    fi
+    if grep -qE '^com\.android\.hotwordenrollment\.' <<< "$donor_pkgs"; then
+        ok "addon hotword: ROM donor sudah punya HotwordEnrollment, tidak disalin"; ADDON_DONE+=(hotword); return 0
+    fi
+    for a in "${apps[@]}"; do
+        n=$(basename "$a"); apk="$a/$n.apk"
+        [[ -f $apk ]] || continue
+        apk_sdk_ok "$apk" "$n" || continue
+        addon_mkdir "$pp/priv-app"
+        addon_install "$a" "$pp/priv-app/$n"
+        prels+=("priv-app/$n" "priv-app/$n/$n.apk")
+    done
+    if [[ ${#prels[@]} -eq 0 ]]; then warn "addon hotword: tidak ada HotwordEnrollment yang cocok dengan versi Android donor"; return 1; fi
+    # library bersama yang diminta APK (uses-library required)
+    if [[ ! -f $se/framework/$lib.jar && ! -f $P_FS/system/system/framework/$lib.jar ]]; then
+        if [[ ! -f $bse/framework/$lib.jar || ! -f $bse/etc/permissions/$lib.xml ]]; then
+            warn "addon hotword DILEWATI: library $lib tidak ada di donor maupun system_ext base"; addon_rollback hotword; return 1
+        fi
+        addon_install "$bse/framework/$lib.jar" "$se/framework/$lib.jar"
+        addon_install "$bse/etc/permissions/$lib.xml" "$se/etc/permissions/$lib.xml"
+        srels+=("framework/$lib.jar" "etc/permissions/$lib.xml")
+    fi
+    for f in $(grep -l 'com.android.hotwordenrollment' "$bp"/etc/permissions/*.xml 2>/dev/null); do
+        addon_install "$f" "$pp/etc/permissions/$(basename "$f")"
+        prels+=("etc/permissions/$(basename "$f")")
+    done
+    addon_ctx "$P_FS" product "${prels[@]}" || true
+    if [[ ${#srels[@]} -gt 0 ]]; then addon_ctx "$P_FS" system_ext "${srels[@]}" || true; fi
+    ADDON_DONE+=(hotword)
+    ok "addon hotword terpasang: $(printf '%s ' "${prels[@]}" | grep -oE 'HotwordEnrollment[A-Za-z_]+' | awk '!s[$0]++' | tr '\n' ' ')(Google app > Hey Google & Voice Match)"
+}
+
+# ------------------------------------------------------------------ Wi-Fi Display (cast layar)
+# Stack WFD Qualcomm dari system_ext base LineageOS ingres (sama dengan proprietary-files sm8450-common).
+# Framework LineageOS/CAF memuat com.qualcomm.wfd.ExtendedRemoteDisplay dari boot classpath, atau dari
+# /system_ext/framework/WfdCommon.jar (ExtendedRemoteDisplayHelper) -> jar ditaruh di system_ext, tanpa
+# mengubah BOOTCLASSPATH. Policy SELinux WFD diambil dari CIL system_ext base (addon_tool.py cilpick).
+WFD_PKG=com.qualcomm.wfd.service
+# string ada di dex jar? (grep -c membaca sampai habis: grep -q + pipefail = SIGPIPE palsu)
+jar_has() { # jar string
+    unzip -p "$1" 'classes*.dex' 2>/dev/null | grep -acF -- "$2" >/dev/null
+}
+base_system_file() { # path_di_system_img(tanpa /system/) out -> 0 kalau berhasil
+    local rel=$1 out=$2 img="$B_IMG/system.img" t tmp="$WORK/addons/basesys"
+    [[ -f $img ]] || return 1
+    rm -rf "$tmp"; mkdir -p "$tmp" "$(dirname "$out")"
+    t=$(gettype -i "$img" 2>/dev/null || true)
+    if [[ $t == erofs ]]; then
+        "${EXTRACT_EROFS:-$BIN/extract.erofs}" -i "$img" -X "system/$rel" -o "$tmp" >/dev/null 2>&1 \
+            || "${EXTRACT_EROFS:-$BIN/extract.erofs}" -i "$img" -X "system/$(dirname "$rel")" -o "$tmp" >/dev/null 2>&1 || true
+    elif command -v debugfs >/dev/null; then
+        debugfs -R "dump /system/$rel $tmp/$(basename "$rel")" "$img" >/dev/null 2>&1 || true
+    fi
+    local f
+    f=$(find "$tmp" -type f -name "$(basename "$rel")" -size +0 | head -n1)
+    [[ -n $f ]] || { rm -rf "$tmp"; return 1; }
+    cp "$f" "$out"; rm -rf "$tmp"
+}
+
+addon_wfd() {
+    local d="$WORK/addons/wfd" bse="$B_FS/system_ext" se="$P_FS/system_ext" sys="$P_FS/system/system" st f rel
+    local svc_jar sel="$P_FS/system_ext/etc/selinux" bsel="$B_FS/system_ext/etc/selinux" ver rc n round miss l
+    local rels=() have=() donorc=()
+    ADDON_CUR=wfd
+    if [[ ! -f $bse/priv-app/WfdService/WfdService.apk || ! -f $bse/etc/init/wfdservice.rc ]]; then
+        warn "addon wfd: system_ext base tidak punya stack WFD (WfdService/wfdservice), dilewati"; return 1
+    fi
+    if [[ -d $se/priv-app/WfdService || -d $sys/priv-app/WfdService ]]; then
+        ok "addon wfd: ROM donor sudah punya WfdService, tidak disalin"
+        set_prop "$se/etc/build.prop" persist.debug.wfd.enable 1
+        ADDON_DONE+=(wfd); return 0
+    fi
+    local bsdk
+    bsdk=$(get_prop "$bse/etc/build.prop" ro.system_ext.build.version.sdk)
+    if [[ -n $bsdk && -n ${PORT_SDK:-} && $bsdk != "$PORT_SDK" ]]; then
+        warn "addon wfd DILEWATI: stack WFD base untuk Android $(android_name "$bsdk"), ROM donor Android $(android_name "$PORT_SDK") (library harus versi Android yang sama)"
+        return 1
+    fi
+    svc_jar="$sys/framework/services.jar"
+    if ! jar_has "$svc_jar" 'com.qualcomm.wfd.ExtendedRemoteDisplay'; then
+        warn "addon wfd DILEWATI: framework donor tidak punya hook ExtendedRemoteDisplay (bukan basis LineageOS/CAF) -> WfdService tidak bisa dipakai system_server"
+        return 1
+    fi
+    if ! jar_has "$svc_jar" '/system_ext/framework/WfdCommon.jar'; then
+        warn "addon wfd DILEWATI: framework donor hanya mencari WfdCommon.jar di boot classpath (butuh ubah BOOTCLASSPATH + boot image)"
+        return 1
+    fi
+    [[ -f $sel/system_ext_sepolicy.cil ]] || { warn "addon wfd: system_ext_sepolicy.cil donor tidak ada"; return 1; }
+    rm -rf "$d"; st="$d/stage/system_ext"; mkdir -p "$st"
+    if ! base_system_file framework/WfdCommon.jar "$st/framework/WfdCommon.jar"; then
+        warn "addon wfd DILEWATI: WfdCommon.jar tidak ada di system base"; return 1
+    fi
+    # salin persis seperti di base (symlink lib/arm64/libwfdnative.so ikut)
+    for rel in priv-app/WfdService bin/wfdservice bin/wfdservice64 etc/init/wfdservice.rc etc/wfdconfigsink.xml \
+               etc/permissions/wfd-system-ext-privapp-permissions-qti.xml etc/seccomp_policy/wfdservice.policy \
+               etc/seccomp_policy/wfdservice64.policy; do
+        [[ -e $bse/$rel || -L $bse/$rel ]] || continue
+        mkdir -p "$st/$(dirname "$rel")"; cp -a "$bse/$rel" "$st/$rel"
+    done
+    for f in "$bse"/lib64/libwfd*.so "$bse"/lib/libwfd*.so; do
+        [[ -f $f ]] || continue
+        rel=${f#"$bse"/}; mkdir -p "$st/$(dirname "$rel")"; cp -a "$f" "$st/$rel"
+    done
+    # dependensi library: yang tidak ada di donor diambil dari system_ext base (maks 3 putaran)
+    for round in 1 2 3 4; do
+        if addon_deps wfd "$d/stage" "$sys" "$se" "$P_FS/product" "$d/stage" 2>/dev/null; then break; fi
+        miss=$(sed -n 's/^  MISSING \([^ ]*\).*/\1/p' "$WORK/addons/deps_wfd.log" | sort -u)
+        n=0
+        for l in $miss; do
+            for f in "$bse/lib64/$l" "$bse/lib/$l"; do
+                [[ -f $f ]] || continue
+                rel=${f#"$bse"/}; [[ -e $st/$rel ]] && continue
+                mkdir -p "$st/$(dirname "$rel")"; cp -a "$f" "$st/$rel"; n=$((n + 1))
+            done
+        done
+        if [[ $n -eq 0 || $round -eq 4 ]]; then
+            addon_deps wfd "$d/stage" "$sys" "$se" "$P_FS/product" "$d/stage" || true
+            warn "addon wfd DILEWATI: library WFD butuh library yang tidak ada di donor maupun system_ext base (MISSING di atas)"
+            return 1
+        fi
+        log "  wfd: $n library pendukung diambil dari system_ext base"
+    done
+    # policy SELinux WFD (kalau donor belum punya)
+    ver=$(tr -d '[:space:]' < "$B_FS/vendor/etc/selinux/plat_sepolicy_vers.txt" 2>/dev/null || true)
+    for f in "$sys/etc/selinux/plat_sepolicy.cil" "$sel/system_ext_sepolicy.cil" "$P_FS/product/etc/selinux/product_sepolicy.cil"; do
+        [[ -f $f ]] && donorc+=(--donor "$f")
+    done
+    for f in "$B_FS/vendor/etc/selinux/vendor_sepolicy.cil" "$B_FS/vendor/etc/selinux/plat_pub_versioned.cil" "$B_FS/odm/etc/selinux/odm_sepolicy.cil"; do
+        [[ -f $f ]] && have+=(--have "$f")
+    done
+    rc=0
+    python3 "$SCRIPT_DIR/addon_tool.py" cilpick "$bsel/system_ext_sepolicy.cil" --match wfd "${donorc[@]}" "${have[@]}" \
+        --tag "$ADDON_CIL_TAG wfd" > "$d/wfd.cil" 2> "$d/wfd.cil.log" || rc=$?
+    case $rc in
+        0) ;;
+        3) log "  wfd: $(head -n1 "$d/wfd.cil.log")"; : > "$d/wfd.cil" ;;
+        *) warn "addon wfd: policy WFD dari base gagal diambil"; return 1 ;;
+    esac
+    # pasang file
+    while IFS= read -r f; do
+        rel=${f#"$st"/}
+        addon_install "$f" "$se/$rel"; rels+=("$rel")
+    done < <(find "$st" \( -type f -o -type l \) | sort)
+    for f in priv-app/WfdService priv-app/WfdService/lib priv-app/WfdService/lib/arm64; do
+        [[ -d $se/$f ]] && rels+=("$f")
+    done
+    rc=0; addon_sign "$se/priv-app/WfdService" force || rc=$?
+    case $rc in
+        0) log "  WfdService: kunci platform donor -> seinfo platform (sama seperti di base)" ;;
+        2) log "  WfdService: testkey -> priv_app (domain vendor_wfd_app lewat seapp isPrivApp)" ;;
+        *) warn "addon wfd: WfdService gagal ditandatangani"; addon_rollback wfd; return 1 ;;
+    esac
+    python3 "$SCRIPT_DIR/apk_index.py" --perms "$se/priv-app/WfdService/WfdService.apk" > "$d/perms.txt" 2>/dev/null || true
+    f="$se/etc/permissions/privapp-permissions-port-wfd.xml"
+    addon_new "$f"
+    n=$(python3 "$SCRIPT_DIR/addon_tool.py" allowlist "$WFD_PKG" "$f" "$d/perms.txt" "$se/etc/permissions/wfd-system-ext-privapp-permissions-qti.xml")
+    rels+=("etc/permissions/privapp-permissions-port-wfd.xml")
+    log "  allowlist privapp $WFD_PKG: $n izin"
+    local ctx=()
+    for rel in "${rels[@]}"; do
+        case $rel in
+            bin/wfdservice|bin/wfdservice64) ctx+=("$rel=u:object_r:vendor_wfdservice_exec:s0") ;;
+            *) ctx+=("$rel") ;;
+        esac
+    done
+    addon_ctx "$P_FS" system_ext "${ctx[@]}" || true
+    # sepolicy + contexts runtime
+    if [[ -s $d/wfd.cil ]]; then
+        addon_backup "$sel/system_ext_sepolicy.cil"
+        if [[ -n $(tail -c1 "$sel/system_ext_sepolicy.cil") ]]; then echo >> "$sel/system_ext_sepolicy.cil"; fi
+        cat "$d/wfd.cil" >> "$sel/system_ext_sepolicy.cil"
+        if [[ -n $ver && -f $sel/mapping/$ver.cil && -f $bsel/mapping/$ver.cil ]]; then
+            addon_backup "$sel/mapping/$ver.cil"
+            while IFS= read -r l; do
+                grep -qxF "$l" "$sel/mapping/$ver.cil" || printf '%s %s\n' "$l" "$ADDON_CIL_TAG wfd" >> "$sel/mapping/$ver.cil"
+            done < <(grep -F wfd "$bsel/mapping/$ver.cil" | grep -v '^(typeattribute ')
+        fi
+        log "  sepolicy: $(wc -l < "$d/wfd.cil") baris CIL WFD dari system_ext base -> system_ext_sepolicy.cil"
+    fi
+    for f in file_contexts service_contexts property_contexts seapp_contexts; do
+        [[ -f $bsel/system_ext_$f && -f $sel/system_ext_$f ]] || continue
+        while IFS= read -r l; do addon_append_line "$sel/system_ext_$f" "$l"; done < <(grep -E 'wfd' "$bsel/system_ext_$f")
+    done
+    if [[ $rc -eq 2 && -f $sel/system_ext_seapp_contexts ]]; then
+        addon_append_line "$sel/system_ext_seapp_contexts" "user=_app isPrivApp=true name=$WFD_PKG:wfd_service domain=vendor_wfd_app type=app_data_file levelFrom=all"
+        addon_append_line "$sel/system_ext_seapp_contexts" "user=_app isPrivApp=true name=com.qualcomm.wfd.client domain=vendor_wfd_app type=app_data_file levelFrom=all"
+    fi
+    addon_backup "$se/etc/build.prop"
+    set_prop "$se/etc/build.prop" persist.debug.wfd.enable 1
+    ADDON_DONE+=(wfd)
+    ok "addon wfd terpasang: WfdService + wfdservice64 + WfdCommon.jar (Setelan > Perangkat terhubung > Cast / Wireless display)"
+}
+
 # touch sampling rate tinggi: driver fts_spi + xiaomi_touch dari vendor_dlkm LineageOS ingres.
 # Mode tinggi = bump_sample_rate 1 (fts_set_report_rate 0x01); Hz-nya ditentukan firmware panel.
 addon_touchrate() {
@@ -496,6 +717,9 @@ addon_touchrate() {
     ok "addon touchrate: mode sampling sentuh tinggi aktif saat boot"
 }
 
+# batalkan addon: tanpa argumen = addon yang sedang dipasang ($ADDON_CUR), "all" = semua addon
+# (dipanggil sepolicy_compile_check kalau sepolicy gabungan gagal di-compile karena baris addon).
+# Urutan mundur: file baru dihapus, file yang diubah dikembalikan ke keadaan sebelum addon.
 addon_rollback() {
     local who=${1:-$ADDON_CUR} i x name f b keepf=() keepb=() done=()
     for (( i=${#ADDON_BACKUPS[@]}-1; i>=0; i-- )); do
@@ -515,6 +739,36 @@ addon_rollback() {
     ADDON_BACKUPS=("${keepb[@]}"); ADDON_FILES=("${keepf[@]}"); ADDON_DONE=("${done[@]}")
 }
 
+# addon yang sumbernya dibuat untuk versi Android tertentu (tree lineage-23.2 = Android 16):
+# di ROM port Android lebih lama, library/APK-nya tidak cocok -> dilewati
+addon_min_sdk() {
+    case $1 in
+        miuicamera) echo 36 ;;      # repo MiuiCamera ingres hanya lineage-23.2 (Android 16) / A17
+        *) echo 0 ;;                # dolby/wfd/hotword: dicek per komponen (minSdk APK, library, sepolicy)
+    esac
+}
+
+# minSdkVersion APK <= versi Android ROM donor? (APK untuk Android lebih baru tidak bisa di-install)
+apk_sdk_ok() { # apk label
+    local mn
+    [[ -n ${PORT_SDK:-} ]] || return 0
+    mn=$(python3 "$SCRIPT_DIR/apk_index.py" --sdk "$1" 2>/dev/null | cut -d' ' -f1)
+    if [[ ${mn:-0} -gt $PORT_SDK ]]; then
+        warn "  $2 butuh Android $(android_name "$mn")+ (minSdk $mn), ROM donor Android $(android_name "$PORT_SDK") -> dilewati"
+        return 1
+    fi
+}
+
+addon_sdk_ok() { # nama
+    local need
+    need=$(addon_min_sdk "$1")
+    [[ $need -gt 0 && -n ${PORT_SDK:-} && -n ${BASE_SDK:-} ]] || return 0
+    if (( PORT_SDK < need || BASE_SDK < need )); then
+        warn "addon $1 dilewati: dibuat untuk Android $(android_name "$need")+, ROM ini system Android $(android_name "$PORT_SDK") / vendor Android $(android_name "$BASE_SDK")"
+        return 1
+    fi
+}
+
 run_addons() {
     local a list
     list=${ADDONS//,/ }
@@ -523,10 +777,12 @@ run_addons() {
     for a in $list; do
         case ${a,,} in
             none) ;;
-            miuicamera|miui-camera|miui_camera) addon_miuicamera || warn "addon MiuiCamera tidak dipasang (lihat pesan di atas)" ;;
-            dolby|dolby-atmos|dax) addon_dolby || warn "addon Dolby tidak dipasang (lihat pesan di atas)" ;;
+            miuicamera|miui-camera|miui_camera) addon_sdk_ok miuicamera && { addon_miuicamera || warn "addon MiuiCamera tidak dipasang (lihat pesan di atas)"; } ;;
+            dolby|dolby-atmos|dax) addon_sdk_ok dolby && { addon_dolby || warn "addon Dolby tidak dipasang (lihat pesan di atas)"; } ;;
             touchrate|touch-rate|htpr) addon_touchrate || warn "addon touchrate tidak dipasang (lihat pesan di atas)" ;;
-            *) warn "ADDONS: '$a' tidak dikenal (pilihan: miuicamera dolby touchrate none)" ;;
+            wfd|cast|wifi-display) addon_wfd || warn "addon wfd (cast layar) tidak dipasang (lihat pesan di atas)" ;;
+            hotword|ok-google|hey-google) addon_hotword || warn "addon hotword (Hey Google) tidak dipasang (lihat pesan di atas)" ;;
+            *) warn "ADDONS: '$a' tidak dikenal (pilihan: miuicamera dolby touchrate wfd hotword none)" ;;
         esac
     done
     if [[ ${#ADDON_DONE[@]} -gt 0 ]]; then ok "addons terpasang: ${ADDON_DONE[*]}"; fi

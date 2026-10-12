@@ -50,11 +50,49 @@ is_miui_tree() { # root (berisi system/system, product, vendor, ...)
     [[ -f $r/system_ext/framework/miui-services.jar || -f $r/system/system/framework/miui-framework.jar ]]
 }
 
+# ------------------------------------------------------------------ versi Android base vs donor
+# Treble hanya satu arah: system (donor) boleh lebih baru dari vendor (base), tidak boleh lebih tua
+# (sepolicy mapping, VINTF, library LLNDK vendor baru tidak dikenal system lama -> bootloop).
+# Mengisi BASE_SDK / PORT_SDK (dipakai addon yang bergantung versi Android).
+BASE_SDK=""; PORT_SDK=""
+ALLOW_DOWNPORT=${ALLOW_DOWNPORT:-false}
+android_name() { case $1 in 30) echo 11;; 31) echo 12;; 32) echo 12L;; 33) echo 13;; 34) echo 14;; 35) echo 15;; 36) echo 16;; 37) echo 17;; *) echo "SDK $1";; esac; }
+android_version_check() {
+    local vb="$B_FS/vendor/build.prop" sb="$P_FS/system/system/build.prop"
+    BASE_SDK=$(get_prop "$vb" ro.vendor.build.version.sdk)
+    [[ -n $BASE_SDK ]] || BASE_SDK=$(get_prop "$vb" ro.build.version.sdk)
+    PORT_SDK=$(get_prop "$sb" ro.system.build.version.sdk)
+    [[ -n $PORT_SDK ]] || PORT_SDK=$(get_prop "$sb" ro.build.version.sdk)
+    if [[ ! $BASE_SDK =~ ^[0-9]+$ || ! $PORT_SDK =~ ^[0-9]+$ ]]; then
+        warn "versi Android base/donor tidak terbaca (vendor SDK '${BASE_SDK}', system SDK '${PORT_SDK}'), cek versi dilewati"
+        BASE_SDK=""; PORT_SDK=""; return 0
+    fi
+    log "Android: vendor base $(android_name "$BASE_SDK") (SDK $BASE_SDK), system donor $(android_name "$PORT_SDK") (SDK $PORT_SDK)"
+    if (( PORT_SDK < BASE_SDK )); then
+        local msg
+        msg="ROM donor Android $(android_name "$PORT_SDK") LEBIH TUA dari vendor base Android $(android_name "$BASE_SDK"). System lama tidak mengenal sepolicy/VINTF/library vendor baru -> pasti bootloop. Untuk donor Android $(android_name "$PORT_SDK") pakai base vendor Android $(android_name "$PORT_SDK") atau lebih lama (mis. fastboot ROM MIUI 14 ingres untuk donor Android 13)"
+        if is_true "$ALLOW_DOWNPORT"; then warn "$msg (ALLOW_DOWNPORT=true, tetap dilanjutkan)"; else die "$msg"; fi
+    elif (( PORT_SDK - BASE_SDK > 3 )); then
+        warn "donor $(( PORT_SDK - BASE_SDK )) versi Android lebih baru dari vendor base: masih bisa boot, tapi HAL vendor lama makin banyak yang tidak dikenali framework (cek logcat)"
+    else
+        ok "versi Android cocok: donor $(android_name "$PORT_SDK") di atas vendor $(android_name "$BASE_SDK")"
+    fi
+}
+
+is_miui_product() { # dir product
+    local p=$1
+    [[ -d $p ]] || return 1
+    grep -qsE '^ro\.miui\.' "$p/etc/build.prop" && return 0
+    compgen -G "$p/priv-app/Miui*" >/dev/null || compgen -G "$p/app/MIUI*" >/dev/null || compgen -G "$p/priv-app/MIUI*" >/dev/null
+}
+
 detect_base_type() {
     case ${BASE_TYPE,,} in
         aosp|hyperos) echo "${BASE_TYPE,,}"; return 0 ;;
     esac
-    if [[ -f $B_IMG/mi_ext.img ]] || is_miui_tree "$B_FS"; then
+    # MIUI 14 (Android 13) belum punya mi_ext: kenali dari product MIUI (prop ro.miui.* / app MIUI).
+    # (mi_thermald tidak bisa dipakai: vendor LineageOS ingres juga membawa blob itu)
+    if [[ -f $B_IMG/mi_ext.img ]] || is_miui_tree "$B_FS" || is_miui_product "$B_FS/product"; then
         echo hyperos
     else
         echo aosp
@@ -785,45 +823,116 @@ sepolicy_compile_check() {
     args+=("$vs/vendor_sepolicy.cil")
     if [[ -f $B_FS/odm/etc/selinux/odm_sepolicy.cil ]]; then args+=("$B_FS/odm/etc/selinux/odm_sepolicy.cil"); fi
     log "sepolicy: secilc ${#args[@]} argumen, vendor plat version $ver"
-    timeout 600 "$sc" "${args[@]}" -o "$WORK/sepolicy.compiled" -f /dev/null > "$WORK/secilc.log" 2>&1 || rc=$?
     # policycap baru (mis. functionfs_seclabel Android 16 QPR) yang belum dikenal secilc: itu
     # hanya flag perilaku kernel, bukan type/atribut -> buang dari salinan sementara lalu ulangi,
-    # supaya cek kecocokan type vendor vs system tetap jalan
+    # supaya cek kecocokan type vendor vs system tetap jalan. sepol_try dipakai ulang setiap compile
+    # (juga setelah addon dibatalkan), karena error policycap bisa baru muncul setelah error lain hilang.
     local cap at f i tries=0 tmpd="$WORK/sepol_tmp" skipped=()
-    while [[ $rc -ne 0 && $tries -lt 8 ]] && grep -q 'Invalid policycap' "$WORK/secilc.log"; do
-        tries=$((tries + 1))
-        cap=$(sed -n 's/.*Invalid policycap (\([A-Za-z0-9_]*\)).*/\1/p' "$WORK/secilc.log" | head -n1)
-        at=$(sed -n 's/.*Invalid policycap ([A-Za-z0-9_]*) at \(.*\):[0-9]*$/\1/p' "$WORK/secilc.log" | head -n1)
-        [[ -n $cap && -n $at && -f $at ]] || break
-        mkdir -p "$tmpd"
-        f=$at
-        if [[ $at != "$tmpd"/* ]]; then
-            f="$tmpd/${tries}_$(basename "$at")"
-            cp "$at" "$f"
-            for i in "${!args[@]}"; do
-                if [[ ${args[$i]} == "$at" ]]; then args[$i]=$f; fi
-            done
-        fi
-        grep -qE "^[[:space:]]*\(policycap[[:space:]]+${cap}[[:space:]]*\)" "$f" || break
-        sed -i -E "/^[[:space:]]*\(policycap[[:space:]]+${cap}[[:space:]]*\)/d" "$f"
-        skipped+=("$cap")
+    sepol_try() {
         rc=0
         timeout 600 "$sc" "${args[@]}" -o "$WORK/sepolicy.compiled" -f /dev/null > "$WORK/secilc.log" 2>&1 || rc=$?
-    done
-    # baris sepolicy addon (MiuiCamera/Dolby) bikin compile gagal -> SEMUA addon dibatalkan
-    # (file, contexts, sepolicy kembali seperti semula), compile ulang. Addon hilang, ROM tetap bisa boot
-    if [[ $rc -ne 0 ]] && grep -qF "${ADDON_CIL_TAG:-; [port-addon]}" "$vs/vendor_sepolicy.cil" 2>/dev/null \
-            && declare -F addon_rollback >/dev/null; then
-        local done_addons="${ADDON_DONE[*]:-}"
-        addon_rollback all
-        # salinan sementara (strip policycap) ikut dibersihkan dari baris addon
-        for f in "${args[@]}"; do
-            if [[ $f == "$tmpd"/* ]]; then grep -vF "$ADDON_CIL_TAG" "$f" > "$f.x" || true; mv -f "$f.x" "$f"; fi
+        while [[ $rc -ne 0 && $tries -lt 8 ]] && grep -q 'Invalid policycap' "$WORK/secilc.log"; do
+            tries=$((tries + 1))
+            cap=$(sed -n 's/.*Invalid policycap (\([A-Za-z0-9_]*\)).*/\1/p' "$WORK/secilc.log" | head -n1)
+            at=$(sed -n 's/.*Invalid policycap ([A-Za-z0-9_]*) at \(.*\):[0-9]*$/\1/p' "$WORK/secilc.log" | head -n1)
+            [[ -n $cap && -n $at && -f $at ]] || break
+            mkdir -p "$tmpd"
+            f=$at
+            if [[ $at != "$tmpd"/* ]]; then
+                f="$tmpd/${tries}_$(basename "$at")"
+                cp "$at" "$f"
+                for i in "${!args[@]}"; do
+                    if [[ ${args[$i]} == "$at" ]]; then args[$i]=$f; fi
+                done
+            fi
+            grep -qE "^[[:space:]]*\(policycap[[:space:]]+${cap}[[:space:]]*\)" "$f" || break
+            sed -i -E "/^[[:space:]]*\(policycap[[:space:]]+${cap}[[:space:]]*\)/d" "$f"
+            skipped+=("$cap")
+            rc=0
+            timeout 600 "$sc" "${args[@]}" -o "$WORK/sepolicy.compiled" -f /dev/null > "$WORK/secilc.log" 2>&1 || rc=$?
         done
-        rc=0
-        timeout 600 "$sc" "${args[@]}" -o "$WORK/sepolicy.compiled" -f /dev/null > "$WORK/secilc.log" 2>&1 || rc=$?
+    }
+    sepol_try
+    # baris sepolicy addon bikin compile gagal -> addon dibatalkan; file, contexts & sepolicy addon
+    # itu kembali seperti semula, addon lain tetap terpasang. Urutan: (1) pastikan dulu gagalnya
+    # memang karena addon: compile ulang salinan TANPA baris addon; kalau tetap gagal, penyebabnya
+    # bukan addon -> tidak ada addon yang dibatalkan. (2) addon yang barisnya ditunjuk error secilc
+    # dibatalkan duluan, (3) sisanya satu per satu (terakhir dipasang duluan), (4) terakhir semua.
+    local tag=${ADDON_CIL_TAG:-; [port-addon]} secil="$P_FS/system_ext/etc/selinux/system_ext_sepolicy.cil"
+    sepol_without_addons() { # 0 = compile berhasil kalau semua baris addon dibuang (salinan sementara)
+        local a2=() f g n=0
+        mkdir -p "$tmpd/noaddon"
+        for f in "${args[@]}"; do
+            if [[ -f $f ]] && grep -qF "$tag" "$f"; then
+                n=$((n + 1)); g="$tmpd/noaddon/${n}_$(basename "$f")"
+                grep -vF "$tag" "$f" > "$g" || true; a2+=("$g")
+            else a2+=("$f"); fi
+        done
+        local r=0 t=0 c at2 i
+        timeout 600 "$sc" "${a2[@]}" -o "$WORK/sepolicy.noaddon" -f /dev/null > "$WORK/secilc.noaddon.log" 2>&1 || r=$?
+        # policycap yang belum dikenal secilc: buang dari salinan, ulangi (sama seperti sepol_try)
+        while [[ $r -ne 0 && $t -lt 8 ]] && grep -q 'Invalid policycap' "$WORK/secilc.noaddon.log"; do
+            t=$((t + 1))
+            c=$(sed -n 's/.*Invalid policycap (\([A-Za-z0-9_]*\)).*/\1/p' "$WORK/secilc.noaddon.log" | head -n1)
+            at2=$(sed -n 's/.*Invalid policycap ([A-Za-z0-9_]*) at \(.*\):[0-9]*$/\1/p' "$WORK/secilc.noaddon.log" | head -n1)
+            [[ -n $c && -f $at2 ]] || break
+            if [[ $at2 != "$tmpd/noaddon/"* ]]; then
+                n=$((n + 1)); g="$tmpd/noaddon/${n}_$(basename "$at2")"; cp "$at2" "$g"
+                for i in "${!a2[@]}"; do [[ ${a2[$i]} == "$at2" ]] && a2[$i]=$g; done
+                at2=$g
+            fi
+            sed -i -E "/^[[:space:]]*\(policycap[[:space:]]+${c}[[:space:]]*\)/d" "$at2"
+            r=0
+            timeout 600 "$sc" "${a2[@]}" -o "$WORK/sepolicy.noaddon" -f /dev/null > "$WORK/secilc.noaddon.log" 2>&1 || r=$?
+        done
+        rm -rf "$tmpd/noaddon" "$WORK/sepolicy.noaddon"; return $r
+    }
+    sepol_err_addons() { # nama addon dari baris CIL yang ditunjuk pesan error secilc
+        local loc f n l
+        grep -oE '(at|of) /[^ :]+:[0-9]+|line [0-9]+ of /[^ ]+' "$WORK/secilc.log" | while read -r loc; do
+            case $loc in
+                line*) n=${loc#line }; n=${n%% *}; f=${loc##* of } ;;
+                *) loc=${loc#* }; f=${loc%:*}; n=${loc##*:} ;;
+            esac
+            [[ -f $f && $n =~ ^[0-9]+$ ]] || continue
+            l=$(sed -n "${n}p" "$f")
+            if [[ $l == *"$tag "* ]]; then l=${l##*"$tag "}; echo "${l%% *}"; fi
+        done | awk '!s[$0]++'
+    }
+    if [[ $rc -ne 0 ]] && declare -F addon_rollback >/dev/null \
+            && grep -qF "$tag" "$vs/vendor_sepolicy.cil" "$secil" 2>/dev/null; then
+        local a idx failed=() ok_after="" guilty
+        if ! sepol_without_addons; then
+            log "sepolicy: compile tetap gagal walau tanpa baris addon -> penyebabnya bukan addon, addon tidak dibatalkan"
+        else
+        for (( idx=0; idx<6 && rc!=0; idx++ )); do
+            guilty=$(sepol_err_addons | tr '\n' ' ')
+            [[ -n ${guilty// /} ]] || break
+            for a in $guilty; do
+                in_list "$a" "${ADDON_DONE[*]:-}" || continue
+                addon_rollback "$a"; failed+=("$a")
+            done
+            sepol_try
+        done
+        if [[ $rc -eq 0 ]]; then ok_after=1; fi
+        for (( idx=${#ADDON_DONE[@]}-1; idx>=0 && rc!=0; idx-- )); do
+            a=${ADDON_DONE[$idx]}
+            grep -qF "$tag $a" "$vs/vendor_sepolicy.cil" "$secil" 2>/dev/null || continue
+            addon_rollback "$a"; failed+=("$a")
+            sepol_try
+            if [[ $rc -eq 0 ]]; then ok_after=1; break; fi
+        done
+        if [[ -z $ok_after ]] && grep -qF "$tag" "$vs/vendor_sepolicy.cil" "$secil" 2>/dev/null; then
+            failed+=("${ADDON_DONE[@]:-}")
+            addon_rollback all
+            for f in "${args[@]}"; do
+                if [[ $f == "$tmpd"/* ]]; then grep -vF "$tag" "$f" > "$f.x" || true; mv -f "$f.x" "$f"; fi
+            done
+            sepol_try
+        fi
         if [[ $rc -eq 0 ]]; then
-            warn "sepolicy: baris addon ($done_addons) bikin compile gagal -> semua addon DIBATALKAN; sepolicy kembali aman (ROM tanpa addon)"
+            warn "sepolicy: baris addon (${failed[*]}) bikin compile gagal -> addon itu DIBATALKAN; sepolicy kembali aman (addon lain: ${ADDON_DONE[*]:-tidak ada})"
+        fi
         fi
     fi
     # baris tambahan port (izin HAL app base) ternyata bikin compile gagal -> buang, compile ulang.
@@ -832,8 +941,7 @@ sepolicy_compile_check() {
         local xc="$P_FS/system_ext/etc/selinux/system_ext_sepolicy.cil"
         grep -vF "$PORT_CIL_TAG" "$xc" > "$WORK/xc.tmp" || true
         cat "$WORK/xc.tmp" > "$xc"; rm -f "$WORK/xc.tmp"
-        rc=0
-        timeout 600 "$sc" "${args[@]}" -o "$WORK/sepolicy.compiled" -f /dev/null > "$WORK/secilc.log" 2>&1 || rc=$?
+        sepol_try
         if [[ $rc -eq 0 ]]; then
             warn "sepolicy: izin HAL untuk app dari base (GameKeys/Leds) bikin compile gagal -> dibuang; sepolicy kembali aman, fitur itu tidak berfungsi"
         fi

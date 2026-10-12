@@ -1,0 +1,172 @@
+name: Port MIUI 14 / HyperOS -> ingres
+
+# Port ROM MIUI 14 (Android 13) atau HyperOS dari HP Xiaomi lain ke ingres (POCO F4 GT / K50 Gaming)
+# memakai toolkit toraidl/hyperos_port (base = ROM resmi MIUI/HyperOS ingres). Toolkit ditambal
+# scripts/miui_toolkit_patch.py supaya donor MIUI 14 (tanpa partisi mi_ext) ikut didukung.
+# Untuk donor ROM AOSP (LineageOS, AxionOS, EvoX, ...) pakai workflow "Port AOSP -> ingres".
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_rom_url:
+        description: "URL ROM base ingres RESMI: OTA recovery MIUI 14 / HyperOS ingres (.zip berisi payload.bin) atau zip xiaomi.eu ingres. Versi Android base harus <= donor"
+        required: true
+        type: string
+      port_rom_url:
+        description: "URL ROM donor MIUI 14 / HyperOS (.zip berisi payload.bin, atau fastboot .tgz). Ideal: SM8450 (mis. marble, diting, cupid)"
+        required: true
+        type: string
+      repack_ext4:
+        description: "Partisi port dibangun EXT4 (bisa mount rw). false = ikut filesystem base (EROFS)"
+        required: false
+        default: true
+        type: boolean
+      remove_encryption:
+        description: "Matikan enkripsi data (butuh Format Data saat flash)"
+        required: false
+        default: false
+        type: boolean
+      upload_release:
+        description: "Unggah hasil ke GitHub Release (tag port-miui-<tanggal>), selain artifact"
+        required: false
+        default: false
+        type: boolean
+
+env:
+  TOOLKIT_REPO: toraidl/hyperos_port
+  TOOLKIT_SHA: 523b0f6378e77e9e93ba6e15a064f45b26274eab
+  DEVICE_CODE: INGRES
+
+concurrency:
+  group: port-miui-ingres-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  port:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    permissions:
+      contents: write
+    steps:
+      - name: Kosongkan disk runner
+        uses: jlumbroso/free-disk-space@v2
+        with:
+          preinstalled-runtimes: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: false
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install dependensi toolkit
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq aria2 python3 busybox zip unzip p7zip-full openjdk-21-jre-headless \
+            zstd bc android-sdk-libsparse-utils xmlstarlet openssl python3-protobuf zipalign >/dev/null
+
+      - name: Ambil toolkit hyperos_port (pinned) + tambalan MIUI 14
+        run: |
+          set -euo pipefail
+          git init -q hyperos_port
+          cd hyperos_port
+          git remote add origin "https://github.com/${TOOLKIT_REPO}.git"
+          git fetch -q --depth 1 origin "$TOOLKIT_SHA"
+          git checkout -q FETCH_HEAD
+          chmod -R +x bin/Linux/x86_64 otatools/bin 2>/dev/null || true
+          # bin/port_config: ext4 / enkripsi sesuai input
+          sed -i "s/^repack_with_ext4=.*/repack_with_ext4=${{ inputs.repack_ext4 }}/" bin/port_config
+          sed -i "s/^remove_data_encryption=.*/remove_data_encryption=${{ inputs.remove_encryption }}/" bin/port_config
+          python3 "$GITHUB_WORKSPACE/scripts/miui_toolkit_patch.py" .
+          bash -n port.sh
+          grep -E '^(partition_to_port|repack_with_ext4|remove_data_encryption|pack_method)=' bin/port_config
+
+      - name: Unduh ROM base & donor
+        env:
+          BASE: ${{ inputs.base_rom_url }}
+          PORT: ${{ inputs.port_rom_url }}
+        run: |
+          set -euo pipefail
+          cd hyperos_port
+          dl() { # url out
+            local url=$1 out=$2 h
+            h=$(python3 "$GITHUB_WORKSPACE/scripts/dl_helper.py" normalize "$url")
+            aria2c -x8 -s8 -k1M --file-allocation=none --console-log-level=warn --summary-interval=60 \
+                   -U "Wget/1.21.4" -o "$out" "$h" || curl -fL --retry 5 -A "Wget/1.21.4" -o "$out" "$h"
+            kind=$(python3 "$GITHUB_WORKSPACE/scripts/dl_helper.py" sniff "$out")
+            [ "$kind" != html ] || { echo "::error::$out: server mengirim halaman HTML, bukan ROM ($url)"; exit 1; }
+            echo "$out: $(( $(stat -c%s "$out") / 1048576 )) MB ($kind)"
+          }
+          # toolkit membaca kode device dari nama file base (miui_<KODE>_..., xiaomi.eu_<KODE>_...)
+          bname=$(basename "${BASE%%\?*}")
+          case $bname in miui_*|xiaomi.eu_*|*_multi_*) ;; *) bname="miui_${DEVICE_CODE}_${bname}" ;; esac
+          case $bname in *.zip) ;; *) bname="$bname.zip" ;; esac
+          pname=$(basename "${PORT%%\?*}")
+          case $pname in *.zip|*.tgz) ;; *) pname="$pname.zip" ;; esac
+          dl "$BASE" "$bname"
+          dl "$PORT" "port_$pname"
+          echo "BASE_FILE=$bname" >> "$GITHUB_ENV"
+          echo "PORT_FILE=port_$pname" >> "$GITHUB_ENV"
+          df -h . | tail -n1
+
+      - name: Port ROM
+        run: |
+          set -o pipefail
+          cd hyperos_port
+          sudo -E bash ./port.sh "$BASE_FILE" "$PORT_FILE" 2>&1 | tee "$GITHUB_WORKSPACE/port-miui.log"
+          ls -la out/ || true
+          z=$(sudo find out -maxdepth 1 -type f -name '*.zip' | head -n1)
+          [ -n "$z" ] || { echo "::error::port.sh tidak menghasilkan zip (lihat log)"; exit 1; }
+          sudo chown -R "$(id -u):$(id -g)" out
+          echo "ROM_ZIP=$PWD/$z" >> "$GITHUB_ENV"
+          echo "ROM_NAME=$(basename "$z")" >> "$GITHUB_ENV"
+
+      - name: Upload log (kalau gagal)
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: port-miui-log
+          path: port-miui.log
+          retention-days: 7
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.ROM_NAME }}
+          path: ${{ env.ROM_ZIP }}
+          compression-level: 0
+          retention-days: 7
+
+      - name: Upload ke GitHub Release
+        if: ${{ inputs.upload_release }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="port-miui-$(date -u +%Y%m%d-%H%M)"
+          split -b 1900M -d "$ROM_ZIP" "$ROM_ZIP.part" && n=$(ls "$ROM_ZIP".part* | wc -l) || n=0
+          if [ "$n" -gt 1 ]; then files=("$ROM_ZIP".part*); else files=("$ROM_ZIP"); rm -f "$ROM_ZIP".part*; fi
+          gh release create "$tag" "${files[@]}" --repo "$GITHUB_REPOSITORY" \
+            --title "MIUI/HyperOS port ingres $(date -u +%Y-%m-%d)" \
+            --notes "Base: ${{ inputs.base_rom_url }}
+          Donor: ${{ inputs.port_rom_url }}
+          File > 2 GB dipecah: gabungkan dengan \`cat ${ROM_NAME}.part* > ${ROM_NAME}\`."
+
+      - name: Ringkasan
+        if: always()
+        run: |
+          {
+            echo "## Port MIUI 14 / HyperOS -> ingres"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Base | ${{ inputs.base_rom_url }} |"
+            echo "| Donor | ${{ inputs.port_rom_url }} |"
+            echo "| Output | ${ROM_NAME:-gagal} |"
+            echo "| EXT4 | ${{ inputs.repack_ext4 }} |"
+            grep -aE 'Android Version:|SDK Verson:|ROM Version:|Device Code:' port-miui.log 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g; s/^/- /' || true
+          } >> "$GITHUB_STEP_SUMMARY"

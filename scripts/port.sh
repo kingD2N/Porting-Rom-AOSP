@@ -589,6 +589,13 @@ vndk_compat() {
     if [[ ! $ver =~ ^[0-9]+$ ]]; then log "VNDK: ro.vndk.version vendor '${ver:-kosong}' (tidak memakai VNDK), dilewati"; return 0; fi
     have=$(find "$P_FS/system_ext/apex" "$P_FS/system/system/apex" -maxdepth 1 -name "com.android.vndk.v$ver.*apex" -printf '%f ' 2>/dev/null || true)
     if [[ -n ${have// /} ]]; then ok "VNDK: vendor butuh v$ver, sudah ada di port ($have)"; vndk_declare "$ver"; return 0; fi
+    # VNDK versi Android system itu sendiri (mis. Android 13 = v33) dikemas sebagai com.android.vndk.current
+    local psdk
+    psdk=$(get_prop "$P_FS/system/system/build.prop" ro.system.build.version.sdk)
+    have=$(find "$P_FS/system_ext/apex" "$P_FS/system/system/apex" -maxdepth 1 -name "com.android.vndk.current*apex" -printf '%f ' 2>/dev/null || true)
+    if [[ $psdk == "$ver" && -n ${have// /} ]]; then
+        ok "VNDK: vendor butuh v$ver = VNDK bawaan Android donor ($have)"; vndk_declare "$ver"; return 0
+    fi
     warn "VNDK: vendor butuh VNDK v$ver tapi APEX-nya tidak ada di system donor -> HAL vendor gagal load kalau tidak ditambah"
     rm -rf "$tmp"; mkdir -p "$tmp"
     for img in system_ext system; do
@@ -1923,6 +1930,7 @@ main() {
 
     # ---------------- 4. PATCH
     group_start "4/7 Patch"
+    android_version_check
     local donor base_dev rid port_name port_ver
     base_dev=$(get_prop "$B_FS/vendor/build.prop" ro.product.vendor.device)
     [[ -n $base_dev ]] || base_dev=$TARGET_DEVICE
