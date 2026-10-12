@@ -71,6 +71,14 @@ INSTALLER=${INSTALLER:-auto}                # auto | base (META-INF dari ROM bas
 RECOVERY_SUPER=${RECOVERY_SUPER:-zst}      # hanya INSTALLER=ours: raw = images/super.img | zst = images/super.img.zst
 RECOVERY_IMG=${RECOVERY_IMG:-}              # opsional: URL/path recovery.img custom (OrangeFox dll)
 BOOT_IMG=${BOOT_IMG:-}                      # opsional: URL/path boot.img custom (kernel), menggantikan boot.img base
+# kernel custom dicek terhadap modul vendor base (CRC simbol, scripts/kernel_crc.py). Modul yang bisa
+# dimuat kernel base tapi tidak oleh kernel custom -> kernel custom TIDAK dipakai (kernel base tetap),
+# kecuali BOOT_FORCE=true. Base MIUI/HyperOS: hanya kernel yang diganti, ramdisk boot base dipertahankan.
+KERNEL_MODULE_CHECK=${KERNEL_MODULE_CHECK:-true}
+BOOT_FORCE=${BOOT_FORCE:-false}
+BOOT_KERNEL_ONLY=${BOOT_KERNEL_ONLY:-auto}  # auto (= true untuk base MIUI/HyperOS) | true | false
+BASE_KIND=""                                # diisi main(): aosp | hyperos
+BOOT_USED=""                                # boot yang benar-benar dipakai (info zip & ringkasan)
 ROM_MAINTAINER=${ROM_MAINTAINER-KingD2N}     # identitas build ROM port: maintainer (kosong = tidak diubah)
 ROM_RELEASE_TYPE=${ROM_RELEASE_TYPE:-UNOFFICIAL} # OFFICIAL di prop versi/jenis rilis ROM donor diganti ini
 # spesifikasi device di Tentang ponsel (prop teks yang diisi ROM donor dengan data HP donor, mis. AxionOS
@@ -1470,9 +1478,90 @@ replace_boot() { # path boot.img base di paket
         fi
     fi
     hv=$(od -An -tu4 -j40 -N4 "$src" | tr -d ' ')
-    if [[ -f $dst ]]; then boot_compat "$dst" "$src"; fi
+    if [[ -f $dst ]]; then
+        boot_compat "$dst" "$src"
+        if ! kernel_module_check "$dst" "$src"; then
+            if is_true "$BOOT_FORCE"; then
+                warn "boot: kernel custom TIDAK cocok dengan modul vendor base, tetap dipakai (BOOT_FORCE=true) -> modul di atas gagal dimuat"
+            else
+                warn "boot: kernel custom TIDAK cocok dengan modul vendor base ROM ini -> boot.img base (kernel bawaan base) yang dipakai. Paksa dengan BOOT_FORCE=true"
+                BOOT_USED="base (kernel custom tidak cocok)"
+                return 0
+            fi
+        fi
+        local ko=$BOOT_KERNEL_ONLY
+        if [[ $ko == auto ]]; then if [[ $BASE_KIND == hyperos ]]; then ko=true; else ko=false; fi; fi
+        if is_true "$ko"; then
+            if boot_kernel_swap "$dst" "$src" "$WORK/boot_swap.img"; then
+                cp -f "$WORK/boot_swap.img" "$dst"; rm -f "$WORK/boot_swap.img"
+                BOOT_USED="kernel ${BOOT_IMG##*/} + ramdisk base"
+                ok "boot.img: kernel dari ${BOOT_IMG##*/}, ramdisk boot base dipertahankan (first-stage init sesuai Android base)"
+                return 0
+            fi
+            warn "boot: ganti kernel saja gagal, boot.img custom dipakai utuh"
+        fi
+    fi
     cp -f "$src" "$dst"
+    BOOT_USED=${BOOT_IMG##*/}
     ok "boot.img diganti: ${BOOT_IMG##*/} ($(( ssz / 1048576 )) MB, header v$hv)"
+}
+
+# kernel dari boot custom ke boot.img base (ramdisk, cmdline, header base tetap)
+boot_kernel_swap() { # base.img custom.img out.img
+    local d b c
+    d=$(mktemp -d "$WORK/kswap.XXXX"); b=$(realpath "$1"); c=$(realpath "$2")
+    mkdir -p "$d/base" "$d/custom"
+    (cd "$d/custom" && magiskboot unpack "$c" >/dev/null 2>&1) || true
+    (cd "$d/base" && magiskboot unpack "$b" >/dev/null 2>&1) || true
+    if [[ ! -s $d/custom/kernel || ! -s $d/base/kernel ]]; then rm -rf "$d"; return 1; fi
+    cp -f "$d/custom/kernel" "$d/base/kernel"
+    (cd "$d/base" && magiskboot repack "$b" "$d/new.img" >/dev/null 2>&1) || { rm -rf "$d"; return 1; }
+    [[ -s $d/new.img ]] || { rm -rf "$d"; return 1; }
+    mv -f "$d/new.img" "$3"; rm -rf "$d"
+}
+
+# modul kernel ROM base (vendor_boot ramdisk + vendor_dlkm + vendor/odm lib/modules) -> folder
+base_kernel_modules() { # out_dir (boot.img di folder paket dipakai untuk mencari vendor_boot.img)
+    local out=$1 imgdir=$2 vb img t
+    rm -rf "$out"; mkdir -p "$out"
+    for vb in "$imgdir/vendor_boot.img" "$B_IMG/vendor_boot.img"; do
+        if [[ -f $vb ]]; then python3 "$SCRIPT_DIR/kernel_crc.py" vbmods "$vb" "$out/vendor_boot" >/dev/null 2>&1 || true; break; fi
+    done
+    img="$B_IMG/vendor_dlkm.img"
+    if [[ -f $img ]]; then
+        t=$(gettype -i "$img" 2>/dev/null || true)
+        mkdir -p "$out/vendor_dlkm"
+        if [[ $t == erofs ]]; then
+            "${EXTRACT_EROFS:-$BIN/extract.erofs}" -i "$img" -X lib/modules -o "$out/vendor_dlkm" >/dev/null 2>&1 \
+                || "$BIN/extract.erofs" -i "$img" -X lib/modules -o "$out/vendor_dlkm" >/dev/null 2>&1 || true
+        elif command -v debugfs >/dev/null; then
+            debugfs -R "rdump /lib/modules $out/vendor_dlkm" "$img" >/dev/null 2>&1 || true
+        fi
+    fi
+    for d in "$B_FS/vendor/lib/modules" "$B_FS/vendor_dlkm/lib/modules" "$B_FS/odm/lib/modules"; do
+        if [[ -d $d ]]; then mkdir -p "$out/fs"; cp -a "$d" "$out/fs/$(basename "$(dirname "$(dirname "$d")")")" 2>/dev/null || true; fi
+    done
+    find "$out" -name '*.ko' | wc -l
+}
+
+# 0 = kernel custom memuat semua modul vendor base yang juga dimuat kernel base (atau cek tidak bisa jalan)
+kernel_module_check() { # base_boot.img custom_boot.img
+    local n rc=0 log="$WORK/kernel_crc.log"
+    is_true "$KERNEL_MODULE_CHECK" || return 0
+    if ! command -v kallsyms-finder >/dev/null; then
+        warn "boot: kallsyms-finder (pip vmlinux-to-elf) tidak ada, kecocokan CRC kernel vs modul vendor tidak dicek"
+        return 0
+    fi
+    n=$(base_kernel_modules "$WORK/base_kmods" "$(dirname "$1")")
+    if [[ ${n:-0} -eq 0 ]]; then warn "boot: modul kernel base tidak terbaca, kecocokan kernel tidak dicek"; return 0; fi
+    timeout 900 python3 "$SCRIPT_DIR/kernel_crc.py" check "$2" --base "$1" "$WORK/base_kmods" > "$log" 2>&1 || rc=$?
+    case $rc in
+        0) ok "boot: kernel custom cocok dengan modul vendor base ($n file .ko) ($(head -n1 "$log" | sed 's/^kernel: //'))"; return 0 ;;
+        3) sed 's/^/    /' "$log" | head -n 45 >&2
+           warn "boot: $(sed -n 's/^MODUL_GAGAL \([0-9/]*\).*/\1/p' "$log") modul vendor base gagal dimuat kernel custom (CRC simbol beda / simbol tidak diekspor)"
+           return 1 ;;
+        *) warn "boot: cek CRC kernel tidak bisa dijalankan ($(tail -n1 "$log")), dilewati"; return 0 ;;
+    esac
 }
 
 boot_ramdisk_size() { # boot.img -> ukuran ramdisk (byte) dari header
@@ -1761,7 +1850,7 @@ ota_info_file() { # file port_ver port_name donor btype
         echo "base_type=$5"; echo "port_partitions=$PORT_PARTITIONS"; echo "ext4_partitions=$EXT4_PARTITIONS"
         echo "disable_encryption=$DISABLE_ENCRYPTION"; echo "rw_mount=$RW_MOUNT"
         echo "disable_avb=$DISABLE_AVB"; echo "debug_adb=$DEBUG_ADB"; echo "package_type=$PACKAGE_TYPE"
-        echo "boot_img=${BOOT_IMG:-base}"; echo "anti_ver=${ANTI_VER:-unknown}"; echo "build_date=$(date +%Y%m%d)"
+        echo "boot_img=${BOOT_USED:-${BOOT_IMG:-base}}"; echo "anti_ver=${ANTI_VER:-unknown}"; echo "build_date=$(date +%Y%m%d)"
     } > "$1"
 }
 
@@ -1827,7 +1916,7 @@ package_ota() { # "partisi logical" name port_ver port_name donor btype
     (cd "$OUT" && sha256sum "$name.zip" > "$name.zip.sha256")
     ok "SELESAI: $OUT/$name.zip ($(du -h "$OUT/$name.zip" | cut -f1)) - OTA A/B: flash di recovery, lalu Format Data"
     if [[ -n ${GITHUB_OUTPUT:-} ]]; then
-        { echo "zip=$OUT/$name.zip"; echo "name=$name"; echo "port_version=$3"; echo "donor=$5"; echo "rom=$4"; echo "base_type=$6"; } >> "$GITHUB_OUTPUT"
+        { echo "zip=$OUT/$name.zip"; echo "name=$name"; echo "port_version=$3"; echo "donor=$5"; echo "rom=$4"; echo "base_type=$6"; echo "boot_used=${BOOT_USED:-boot.img base}"; } >> "$GITHUB_OUTPUT"
     fi
 }
 
@@ -1923,6 +2012,7 @@ main() {
     done
     local btype
     btype=$(detect_base_type)
+    BASE_KIND=$btype
     log "tipe ROM base: $btype"
     # system_ext base: sumber RRO khas device (base AOSP) / COPY_FROM_BASE system_ext/...
     if [[ -f $B_IMG/system_ext.img ]] && { [[ $btype == aosp ]] || [[ " $COPY_FROM_BASE" == *" system_ext/"* ]]; }; then
@@ -2094,7 +2184,7 @@ main() {
         echo "disable_encryption=$DISABLE_ENCRYPTION"; echo "rw_mount=$RW_MOUNT"
         echo "disable_avb=$DISABLE_AVB"; echo "debug_adb=$DEBUG_ADB"
         echo "super_size=$SUPER_SIZE"; echo "super_format=$RECOVERY_SUPER"
-        echo "boot_img=${BOOT_IMG:-base}"; echo "installer=$mode"
+        echo "boot_img=${BOOT_USED:-${BOOT_IMG:-base}}"; echo "installer=$mode"
         echo "anti_ver=${ANTI_VER:-unknown}"; echo "build_date=$stamp"
     } > "$pkg/META-INF/port_info.txt"
     ls -la "$pkg/images"
@@ -2103,7 +2193,7 @@ main() {
     (cd "$OUT" && sha256sum "$name.zip" > "$name.zip.sha256")
     ok "SELESAI: $OUT/$name.zip ($(du -h "$OUT/$name.zip" | cut -f1))"
     if [[ -n ${GITHUB_OUTPUT:-} ]]; then
-        { echo "zip=$OUT/$name.zip"; echo "name=$name"; echo "port_version=$port_ver"; echo "donor=$donor"; echo "rom=$port_name"; echo "base_type=$btype"; } >> "$GITHUB_OUTPUT"
+        { echo "zip=$OUT/$name.zip"; echo "name=$name"; echo "port_version=$port_ver"; echo "donor=$donor"; echo "rom=$port_name"; echo "base_type=$btype"; echo "boot_used=${BOOT_USED:-boot.img base}"; } >> "$GITHUB_OUTPUT"
     fi
     group_end
 }

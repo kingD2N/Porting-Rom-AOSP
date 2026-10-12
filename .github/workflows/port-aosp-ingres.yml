@@ -69,7 +69,7 @@ on:
         default: "KingD2N"
         type: string
       boot_img_url:
-        description: "URL boot.img custom (default: kernel D2N 5.10.271-gki-MIX). Kosongkan = boot.img ROM base"
+        description: "URL boot.img custom (default: kernel D2N 5.10.271-gki-MIX). Dicek otomatis vs modul vendor base (CRC): tidak cocok (mis. base MIUI 14) = kernel base dipakai. Kosongkan = boot.img ROM base"
         required: false
         default: "https://github.com/kingD2N/ALL-PROJECT-D2N/releases/download/TES/boot.img"
         type: string
@@ -175,6 +175,9 @@ jobs:
           # secilc: cek compile sepolicy gabungan. Tidak fatal: port.sh hanya memberi warning kalau tidak ada.
           sudo apt-get install -y -qq secilc >/dev/null || echo "::warning::secilc tidak tersedia, cek sepolicy dilewati"
           sudo apt-get install -y -qq apksigner zipalign >/dev/null || true
+          # kallsyms-finder: baca CRC simbol kernel custom (cek kecocokan dengan modul vendor base)
+          pip3 install --break-system-packages -q "git+https://github.com/marin-m/vmlinux-to-elf@19683fb95b29cd31362d49e6f48ab8368f96cbdf" \
+            || echo "::warning::vmlinux-to-elf gagal dipasang, cek CRC kernel vs modul vendor dilewati"
           aria2c --version | head -n1
           command -v secilc && secilc --help 2>&1 | head -n1 || true
 
@@ -384,7 +387,7 @@ jobs:
           DISABLE_ENCRYPTION: ${{ inputs.disable_encryption }}
           RW_MOUNT: ${{ inputs.rw_mount }}
           DEBUG_ADB: ${{ inputs.debug_adb }}
-          BOOT: ${{ inputs.boot_img_url }}
+          BOOT: ${{ steps.port.outputs.boot_used || inputs.boot_img_url }}
           PKG: ${{ inputs.package_type }}
           ADDONS_IN: ${{ inputs.addons }}
         run: |
