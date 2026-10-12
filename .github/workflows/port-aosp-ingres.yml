@@ -6,7 +6,7 @@ on:
       base_rom_url:
         description: "URL ROM base ingres: OTA AOSP ingres (.zip payload.bin) / fastboot MIUI-HyperOS (.tgz) / zip xiaomi.eu. Donor Android 13 = base MIUI 14 ingres"
         required: true
-        default: "https://release-assets.githubusercontent.com/github-production-release-asset/1059768276/ee3273e9-60a7-44ef-8ca0-d72ecd29c429?sp=r&sv=2018-11-09&sr=b&spr=https&se=2026-10-12T12%3A17%3A48Z&rscd=attachment%3B+filename%3Dlineage-22.2-20250918-UNOFFICIAL-ingres.zip&rsct=application%2Foctet-stream&skoid=96c2d410-5711-43a1-aedd-ab1947aa7ab0&sktid=398a6654-997b-47e9-b12b-9515b896b4de&skt=2026-10-12T11%3A17%3A18Z&ske=2026-10-12T12%3A17%3A48Z&sks=b&skv=2018-11-09&sig=CVLOR%2FFzOP5gOxtwVbAnLqpFc0d0gfKKboFORxFkTEk%3D&jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmVsZWFzZS1hc3NldHMuZ2l0aHVidXNlcmNvbnRlbnQuY29tIiwia2V5Ijoia2V5MSIsImV4cCI6MTc5MTgwODk0MywibmJmIjoxNzkxODA1MzQzLCJwYXRoIjoicmVsZWFzZWFzc2V0cHJvZHVjdGlvbi5ibG9iLmNvcmUud2luZG93cy5uZXQifQ.zpmBKRtzBaM79nQWuD3LJJaZL7DISuDStRJQzU5txzs&response-content-disposition=attachment%3B%20filename%3Dlineage-22.2-20250918-UNOFFICIAL-ingres.zip&response-content-type=application%2Foctet-stream"
+        default: "https://drive.usercontent.google.com/download?id=1MWQGwzyX_Z_IUITSGaUkCSYPl2fbOgjm&export=download&authuser=0&confirm=t&uuid=5ae275cf-59a9-4a36-a67b-a2ad2fbefa06&at=AMrWOn0TnjOJeW2De0f_hmIl2DxY%3A1791819039316"
       port_rom_url:
         description: "URL OTA ROM AOSP donor (.zip berisi payload.bin). Ideal: device SM8450 (taro), basis sama dengan base"
         required: true
