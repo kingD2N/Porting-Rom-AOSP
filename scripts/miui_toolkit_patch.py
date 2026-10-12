@@ -14,6 +14,9 @@ Perubahan (idempoten, gagal kalau baris acuan tidak ditemukan = versi toolkit be
 4. Nama paket: "miui" untuk donor MIUI 14 (toolkit selalu menulis "hyperos").
 5. Base zip gaya xiaomi.eu dari ROM custom (mis. RYUUI ingres) yang berisi images/super.img.zst
    atau super.img utuh, bukan potongan sparse super.img.0..N: dibuka dulu jadi super.img.
+6. Donor zip gaya xiaomi.eu / ROM custom MIUI (images/super.img*, mis. LUXE, RYUUI) diterima walau
+   nama file tanpa "xiaomi.eu" (toolkit asli juga salah mengecek isi zip base, bukan donor), dan
+   super.img utuh / .zst / potongan sparse dibuka seperti base.
 """
 import sys
 
@@ -69,28 +72,40 @@ def patch(path):
         'os_type="hyperos"\n'
         'if [[ ${port_is_miui:-false} == true ]]; then os_type="miui"; fi  ' + MARK + '\n')
 
+    def super_block(r):
+        d = "build/%s/images" % r
+        return ('    ' + MARK + ' super.img.zst / super.img utuh (ROM custom) selain super.img.N sparse (xiaomi.eu)\n'
+                '    if [[ -f %(d)s/super.img.zst ]]; then\n'
+                '        zstd -d --rm -q %(d)s/super.img.zst -o %(d)s/super.img.whole\n'
+                '    elif [[ -f %(d)s/super.img ]]; then\n'
+                '        mv %(d)s/super.img %(d)s/super.img.whole\n'
+                '    fi\n'
+                '    if [[ -f %(d)s/super.img.whole ]]; then\n'
+                '        if [[ $(head -c4 %(d)s/super.img.whole | od -An -tx1 | tr -d " \\n") == 3aff26ed ]]; then\n'
+                '            simg2img %(d)s/super.img.whole %(d)s/super.img\n'
+                '            rm -f %(d)s/super.img.whole\n'
+                '        else\n'
+                '            mv %(d)s/super.img.whole %(d)s/super.img\n'
+                '        fi\n'
+                '    else\n'
+                '        simg2img %(d)s/super.img.* %(d)s/super.img\n'
+                '    fi\n'
+                '    rm -rf %(d)s/super.img.*\n') % {"d": d}
+
     rep('    simg2img build/baserom/images/super.img.* build/baserom/images/super.img\n'
-        '    rm -rf build/baserom/images/super.img.*\n',
-        '    ' + MARK + ' super.img.zst / super.img utuh (ROM custom) selain super.img.N sparse (xiaomi.eu)\n'
-        '    if [[ -f build/baserom/images/super.img.zst ]]; then\n'
-        '        zstd -d --rm -q build/baserom/images/super.img.zst -o build/baserom/images/super.img.whole\n'
-        '    elif [[ -f build/baserom/images/super.img ]]; then\n'
-        '        mv build/baserom/images/super.img build/baserom/images/super.img.whole\n'
-        '    fi\n'
-        '    if [[ -f build/baserom/images/super.img.whole ]]; then\n'
-        '        if [[ $(head -c4 build/baserom/images/super.img.whole | od -An -tx1 | tr -d " \\n") == 3aff26ed ]]; then\n'
-        '            simg2img build/baserom/images/super.img.whole build/baserom/images/super.img\n'
-        '            rm -f build/baserom/images/super.img.whole\n'
-        '        else\n'
-        '            mv build/baserom/images/super.img.whole build/baserom/images/super.img\n'
-        '        fi\n'
-        '    else\n'
-        '        simg2img build/baserom/images/super.img.* build/baserom/images/super.img\n'
-        '    fi\n'
-        '    rm -rf build/baserom/images/super.img.*\n')
+        '    rm -rf build/baserom/images/super.img.*\n', super_block("baserom"))
+
+    # 6. donor zip gaya xiaomi.eu / ROM custom
+    rep('        elif [[ "${portrom}" == *"xiaomi.eu"* ]] && (unzip -l ${baserom} | grep -q "images/super.img*") ; then\n',
+        '        elif unzip -l "${portrom}" | grep -q "images/super.img"; then  ' + MARK + ' zip gaya xiaomi.eu / ROM custom MIUI\n')
+    rep("    unzip ${portrom} 'images/super.img.*' -d build/portrom",
+        "    unzip ${portrom} 'images/super.img*' -d build/portrom")
+    rep('    simg2img build/portrom/images/super.img.* build/portrom/images/super.img\n'
+        '    rm -rf build/portrom/images/super.img.*\n', super_block("portrom"))
 
     open(path, "w", encoding="utf-8").write(s)
-    print("port.sh ditambal: MIUI 14 (tanpa mi_ext), kode versi Android 13, cek versi Treble, nama paket, super.img.zst")
+    print("port.sh ditambal: MIUI 14 (tanpa mi_ext), kode versi Android 13, cek versi Treble, nama paket, "
+          "super.img utuh/.zst (base & donor), donor zip ROM custom MIUI")
     return 0
 
 
