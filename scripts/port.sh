@@ -1527,8 +1527,15 @@ base_kernel_modules() { # out_dir (boot.img di folder paket dipakai untuk mencar
     for vb in "$imgdir/vendor_boot.img" "$B_IMG/vendor_boot.img"; do
         if [[ -f $vb ]]; then python3 "$SCRIPT_DIR/kernel_crc.py" vbmods "$vb" "$out/vendor_boot" >/dev/null 2>&1 || true; break; fi
     done
-    img="$B_IMG/vendor_dlkm.img"
-    if [[ -f $img ]]; then
+    # vendor_dlkm base sudah dipindah ke folder image paket / OUT_IMG_TMP saat boot diganti
+    img=""
+    for t in "$imgdir/vendor_dlkm.img" "${OUT_IMG_TMP:-/nonexistent}/vendor_dlkm.img" "$B_IMG/vendor_dlkm.img"; do
+        if [[ -f $t ]]; then img=$t; break; fi
+    done
+    if [[ -n $img && $(head -c4 "$img" | od -An -tx1 | tr -d ' \n') == 3aff26ed ]]; then
+        simg2img "$img" "$out/vendor_dlkm.raw" 2>/dev/null && img="$out/vendor_dlkm.raw"
+    fi
+    if [[ -n $img ]]; then
         t=$(gettype -i "$img" 2>/dev/null || true)
         mkdir -p "$out/vendor_dlkm"
         if [[ $t == erofs ]]; then
@@ -1537,6 +1544,10 @@ base_kernel_modules() { # out_dir (boot.img di folder paket dipakai untuk mencar
         elif command -v debugfs >/dev/null; then
             debugfs -R "rdump /lib/modules $out/vendor_dlkm" "$img" >/dev/null 2>&1 || true
         fi
+        rm -f "$out/vendor_dlkm.raw"
+        [[ -n $(find "$out/vendor_dlkm" -name '*.ko' -print -quit) ]] || warn "boot: modul vendor_dlkm base tidak terbaca (${img##*/}), cek kernel hanya memakai modul vendor_boot"
+    else
+        warn "boot: vendor_dlkm.img base tidak ditemukan, cek kernel hanya memakai modul vendor_boot"
     fi
     for d in "$B_FS/vendor/lib/modules" "$B_FS/vendor_dlkm/lib/modules" "$B_FS/odm/lib/modules"; do
         if [[ -d $d ]]; then mkdir -p "$out/fs"; cp -a "$d" "$out/fs/$(basename "$(dirname "$(dirname "$d")")")" 2>/dev/null || true; fi
