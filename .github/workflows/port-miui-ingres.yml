@@ -9,8 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       base_rom_url:
-        description: "URL ROM base ingres RESMI: OTA recovery MIUI 14 / HyperOS ingres (.zip berisi payload.bin) atau zip xiaomi.eu ingres. Versi Android base harus <= donor"
+        description: "URL ROM base ingres: default RYUUI MIUI 14 ingres (V14.0.11.0.TLJCNXM, Android 13). Bisa juga OTA recovery MIUI 14 / HyperOS ingres (.zip payload.bin) atau zip gaya xiaomi.eu (images/super.img.*). Versi Android base harus <= donor"
         required: true
+        default: "https://drive.usercontent.google.com/download?id=14HgNUJiiEvyzjDQXFaQVgjVcsZulF2ht&export=download&confirm=t"
         type: string
       port_rom_url:
         description: "URL ROM donor MIUI 14 / HyperOS (.zip berisi payload.bin, atau fastboot .tgz). Ideal: SM8450 (mis. marble, diting, cupid)"
@@ -92,25 +93,20 @@ jobs:
         run: |
           set -euo pipefail
           cd hyperos_port
-          dl() { # url out
-            local url=$1 out=$2 h
-            h=$(python3 "$GITHUB_WORKSPACE/scripts/dl_helper.py" normalize "$url")
-            aria2c -x8 -s8 -k1M --file-allocation=none --console-log-level=warn --summary-interval=60 \
-                   -U "Wget/1.21.4" -o "$out" "$h" || curl -fL --retry 5 -A "Wget/1.21.4" -o "$out" "$h"
-            kind=$(python3 "$GITHUB_WORKSPACE/scripts/dl_helper.py" sniff "$out")
-            [ "$kind" != html ] || { echo "::error::$out: server mengirim halaman HTML, bukan ROM ($url)"; exit 1; }
-            echo "$out: $(( $(stat -c%s "$out") / 1048576 )) MB ($kind)"
-          }
+          # nama file asli dari server (Google Drive/SourceForge/...), halaman konfirmasi dilewati
+          base=$(bash "$GITHUB_WORKSPACE/scripts/fetch_rom.sh" "$BASE" dl_base)
+          port=$(bash "$GITHUB_WORKSPACE/scripts/fetch_rom.sh" "$PORT" dl_port)
           # toolkit membaca kode device dari nama file base (miui_<KODE>_..., xiaomi.eu_<KODE>_...)
-          bname=$(basename "${BASE%%\?*}")
+          bname=$(basename "$base")
           case $bname in miui_*|xiaomi.eu_*|*_multi_*) ;; *) bname="miui_${DEVICE_CODE}_${bname}" ;; esac
           case $bname in *.zip) ;; *) bname="$bname.zip" ;; esac
-          pname=$(basename "${PORT%%\?*}")
+          mv "$base" "$bname"
+          pname=$(basename "$port")
           case $pname in *.zip|*.tgz) ;; *) pname="$pname.zip" ;; esac
-          dl "$BASE" "$bname"
-          dl "$PORT" "port_$pname"
+          mv "$port" "port_$pname"
           echo "BASE_FILE=$bname" >> "$GITHUB_ENV"
           echo "PORT_FILE=port_$pname" >> "$GITHUB_ENV"
+          echo "isi zip base:"; unzip -l "$bname" | awk 'NR>3 && $4!="" {print "  "$4}' | grep -vE '^  (META-INF|firmware-update)/' | head -n 25 || true
           df -h . | tail -n1
 
       - name: Port ROM

@@ -12,6 +12,8 @@ Perubahan (idempoten, gagal kalau baris acuan tidak ditemukan = versi toolkit be
 2. Kode device di versi (mis. V14.0.4.0.TLJxxXM): Android 13 = awalan T (toolkit hanya kenal U/V).
 3. Cek arah Treble: system donor lebih tua dari vendor base -> berhenti (pasti bootloop).
 4. Nama paket: "miui" untuk donor MIUI 14 (toolkit selalu menulis "hyperos").
+5. Base zip gaya xiaomi.eu dari ROM custom (mis. RYUUI ingres) yang berisi images/super.img.zst
+   atau super.img utuh, bukan potongan sparse super.img.0..N: dibuka dulu jadi super.img.
 """
 import sys
 
@@ -67,8 +69,28 @@ def patch(path):
         'os_type="hyperos"\n'
         'if [[ ${port_is_miui:-false} == true ]]; then os_type="miui"; fi  ' + MARK + '\n')
 
+    rep('    simg2img build/baserom/images/super.img.* build/baserom/images/super.img\n'
+        '    rm -rf build/baserom/images/super.img.*\n',
+        '    ' + MARK + ' super.img.zst / super.img utuh (ROM custom) selain super.img.N sparse (xiaomi.eu)\n'
+        '    if [[ -f build/baserom/images/super.img.zst ]]; then\n'
+        '        zstd -d --rm -q build/baserom/images/super.img.zst -o build/baserom/images/super.img.whole\n'
+        '    elif [[ -f build/baserom/images/super.img ]]; then\n'
+        '        mv build/baserom/images/super.img build/baserom/images/super.img.whole\n'
+        '    fi\n'
+        '    if [[ -f build/baserom/images/super.img.whole ]]; then\n'
+        '        if [[ $(head -c4 build/baserom/images/super.img.whole | od -An -tx1 | tr -d " \\n") == 3aff26ed ]]; then\n'
+        '            simg2img build/baserom/images/super.img.whole build/baserom/images/super.img\n'
+        '            rm -f build/baserom/images/super.img.whole\n'
+        '        else\n'
+        '            mv build/baserom/images/super.img.whole build/baserom/images/super.img\n'
+        '        fi\n'
+        '    else\n'
+        '        simg2img build/baserom/images/super.img.* build/baserom/images/super.img\n'
+        '    fi\n'
+        '    rm -rf build/baserom/images/super.img.*\n')
+
     open(path, "w", encoding="utf-8").write(s)
-    print("port.sh ditambal: MIUI 14 (tanpa mi_ext), kode versi Android 13, cek versi Treble, nama paket")
+    print("port.sh ditambal: MIUI 14 (tanpa mi_ext), kode versi Android 13, cek versi Treble, nama paket, super.img.zst")
     return 0
 
 

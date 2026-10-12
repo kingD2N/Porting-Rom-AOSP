@@ -82,7 +82,7 @@ Addon sesuai versi Android (dicek otomatis, yang tidak cocok dilewati):
 | `hotword` | dari `product` base kalau minSdk APK cocok | dipasang (donor dengan Google app) |
 | GameKeys / Leds / Aperture | tidak ada (khusus base LineageOS) | disalin dari base |
 
-Workflow **Port MIUI 14 / HyperOS -> ingres** menjalankan toolkit [toraidl/hyperos_port](https://github.com/toraidl/hyperos_port) (commit dikunci sama dengan workflow AOSP), ditambal `scripts/miui_toolkit_patch.py`: donor MIUI 14 tanpa partisi `mi_ext` (versi diambil dari `product`/`system`), kode versi Android 13 (`T...`), cek versi (donor lebih tua dari base = berhenti), nama paket `miui_...`. Nama file base diberi awalan `miui_INGRES_` kalau belum ada (toolkit membaca kode device dari nama file). Input: `base_rom_url`, `port_rom_url`, `repack_ext4` (default true), `remove_encryption`, `upload_release`. Hasil: artifact zip (dan GitHub Release kalau dipilih, dipecah per 1900 MB).
+Workflow **Port MIUI 14 / HyperOS -> ingres** menjalankan toolkit [toraidl/hyperos_port](https://github.com/toraidl/hyperos_port) (commit dikunci sama dengan workflow AOSP), ditambal `scripts/miui_toolkit_patch.py`: donor MIUI 14 tanpa partisi `mi_ext` (versi diambil dari `product`/`system`), kode versi Android 13 (`T...`), cek versi (donor lebih tua dari base = berhenti), nama paket `miui_...`. Nama file base diberi awalan `miui_INGRES_` kalau belum ada (toolkit membaca kode device dari nama file). Input: `base_rom_url` (default **RYUUI MIUI 14 ingres** `RYUUI_INGRES_V14.0.11.0.TLJCNXM_EU261003.zip`, Android 13, Google Drive), `port_rom_url`, `repack_ext4` (default true), `remove_encryption`, `upload_release`. ROM diunduh `scripts/fetch_rom.sh` dengan nama file asli (Content-Disposition, halaman konfirmasi Google Drive dilewati). Base zip gaya xiaomi.eu berisi `images/super.img.zst` atau `super.img` utuh (ROM custom) juga diterima, selain potongan sparse `super.img.0..N`. Base yang sama bisa dipakai di workflow AOSP untuk donor ROM AOSP Android 13 (isi `base_rom_url` dengan link ini). Hasil: artifact zip (dan GitHub Release kalau dipilih, dipecah per 1900 MB).
 
 Donor GSI (satu `system.img`) tidak didukung di sini, flash GSI dengan cara biasa saja.
 
@@ -217,7 +217,8 @@ File yang mau dipaksa ke versi ingres: taruh di `devices/ingres/<partisi>/...` (
 ```
 .github/workflows/port-aosp-ingres.yml   workflow utama (donor ROM AOSP)
 .github/workflows/port-miui-ingres.yml   port MIUI 14 / HyperOS (toolkit hyperos_port + tambalan)
-scripts/miui_toolkit_patch.py            tambalan port.sh hyperos_port untuk donor MIUI 14 (Android 13)
+scripts/miui_toolkit_patch.py            tambalan port.sh hyperos_port untuk donor MIUI 14 (Android 13) & base super.img.zst
+scripts/fetch_rom.sh                     unduh ROM dengan nama file asli (Google Drive/SourceForge/...)
 scripts/port.sh                          proses port
 scripts/aosp_extras.sh                   overlay, updater, displayconfig, FCM, cek sepolicy/checkvintf/ABI/IMS
 scripts/addons.sh                        addon MIUI Camera, Dolby, touch rate, cast layar (WFD), Hey Google (stage, cek versi Android & dependensi, pasang, rollback)
