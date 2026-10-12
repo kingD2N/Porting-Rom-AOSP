@@ -32,6 +32,21 @@ on:
         required: false
         default: false
         type: boolean
+      boot_img_url:
+        description: "Opsional: URL boot.img kernel custom. Dicek otomatis vs modul vendor base (CRC); tidak cocok = kernel bawaan base dipakai. Kosong = kernel base"
+        required: false
+        default: ""
+        type: string
+  # dipanggil workflow lain (mis. port-hyperos-ingres.yml) dengan default berbeda
+  workflow_call:
+    inputs:
+      base_rom_url: { type: string, required: true }
+      port_rom_url: { type: string, required: true }
+      repack_ext4: { type: boolean, required: false, default: true }
+      remove_encryption: { type: boolean, required: false, default: false }
+      upload_release: { type: boolean, required: false, default: false }
+      boot_img_url: { type: string, required: false, default: "" }
+      title: { type: string, required: false, default: "Port MIUI 14 / HyperOS -> ingres" }
 
 env:
   TOOLKIT_REPO: toraidl/hyperos_port
@@ -68,7 +83,10 @@ jobs:
           set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y -qq aria2 python3 busybox zip unzip p7zip-full openjdk-21-jre-headless \
-            zstd bc android-sdk-libsparse-utils xmlstarlet openssl python3-protobuf zipalign >/dev/null
+            zstd bc android-sdk-libsparse-utils xmlstarlet openssl python3-protobuf zipalign e2fsprogs lz4 >/dev/null
+          # kallsyms-finder: cek CRC kernel custom vs modul vendor base
+          pip3 install --break-system-packages -q "git+https://github.com/marin-m/vmlinux-to-elf@19683fb95b29cd31362d49e6f48ab8368f96cbdf" \
+            || echo "::warning::vmlinux-to-elf gagal dipasang, kernel custom tidak bisa dicek (kernel base dipakai)"
 
       - name: Ambil toolkit hyperos_port (pinned) + tambalan MIUI 14
         run: |
@@ -90,6 +108,7 @@ jobs:
         env:
           BASE: ${{ inputs.base_rom_url }}
           PORT: ${{ inputs.port_rom_url }}
+          BOOT: ${{ inputs.boot_img_url }}
         run: |
           set -euo pipefail
           cd hyperos_port
@@ -106,6 +125,15 @@ jobs:
           mv "$port" "port_$pname"
           echo "BASE_FILE=$bname" >> "$GITHUB_ENV"
           echo "PORT_FILE=port_$pname" >> "$GITHUB_ENV"
+          if [ -n "$BOOT" ]; then
+            boot=$(bash "$GITHUB_WORKSPACE/scripts/fetch_rom.sh" "$BOOT" dl_boot) || boot=""
+            if [ -n "$boot" ] && [ "$(head -c 8 "$boot")" = "ANDROID!" ]; then
+              echo "PORT_BOOT_IMG=$PWD/$boot" >> "$GITHUB_ENV"
+              echo "boot.img custom: $boot ($(strings -a "$boot" | grep -m1 -oE 'Linux version [0-9][^ ]*' || echo '?'))"
+            else
+              echo "::warning::boot_img_url gagal diunduh / bukan boot image, kernel base dipakai"
+            fi
+          fi
           echo "isi zip base:"; unzip -l "$bname" | awk 'NR>3 && $4!="" {print "  "$4}' | grep -vE '^  (META-INF|firmware-update)/' | head -n 25 || true
           df -h . | tail -n1
 
@@ -113,7 +141,9 @@ jobs:
         run: |
           set -o pipefail
           cd hyperos_port
-          sudo -E bash ./port.sh "$BASE_FILE" "$PORT_FILE" 2>&1 | tee "$GITHUB_WORKSPACE/port-miui.log"
+          # hook kernel custom (miui_toolkit_patch.py): dipasang hanya kalau CRC cocok dengan modul vendor base
+          export PORT_BOOT_HOOK="$GITHUB_WORKSPACE/scripts/miui_boot_hook.sh" KERNEL_REPORT="$GITHUB_WORKSPACE/kernel-used.txt"
+          sudo -E env "PATH=$PATH" bash ./port.sh "$BASE_FILE" "$PORT_FILE" 2>&1 | tee "$GITHUB_WORKSPACE/port-miui.log"
           ls -la out/ || true
           z=$(sudo find out -maxdepth 1 -type f -name '*.zip' | head -n1)
           [ -n "$z" ] || { echo "::error::port.sh tidak menghasilkan zip (lihat log)"; exit 1; }
@@ -156,7 +186,7 @@ jobs:
         if: always()
         run: |
           {
-            echo "## Port MIUI 14 / HyperOS -> ingres"
+            echo "## ${{ inputs.title || 'Port MIUI 14 / HyperOS -> ingres' }}"
             echo
             echo "| | |"
             echo "|---|---|"
@@ -164,5 +194,6 @@ jobs:
             echo "| Donor | ${{ inputs.port_rom_url }} |"
             echo "| Output | ${ROM_NAME:-gagal} |"
             echo "| EXT4 | ${{ inputs.repack_ext4 }} |"
+            echo "| Kernel | $(cat kernel-used.txt 2>/dev/null || echo 'base') |"
             grep -aE 'Android Version:|SDK Verson:|ROM Version:|Device Code:' port-miui.log 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g; s/^/- /' || true
           } >> "$GITHUB_STEP_SUMMARY"

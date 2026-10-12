@@ -9,7 +9,7 @@ Perubahan (idempoten, gagal kalau baris acuan tidak ditemukan = versi toolkit be
 1. MIUI 14 tidak punya partisi mi_ext -> versi ROM donor diambil dari build.prop product/system
    (ro.product.build.version.incremental / ro.system.build.version.incremental), bukan
    ro.mi.os.version.incremental.
-2. Kode device di versi (mis. V14.0.4.0.TLJxxXM): Android 13 = awalan T (toolkit hanya kenal U/V).
+2. Kode device di versi (mis. V14.0.4.0.TLJxxXM): Android 13 = T, 16 = W, 17 = X (toolkit hanya kenal U/V).
 3. Cek arah Treble: system donor lebih tua dari vendor base -> berhenti (pasti bootloop).
 4. Nama paket: "miui" untuk donor MIUI 14 (toolkit selalu menulis "hyperos").
 5. Base zip gaya xiaomi.eu dari ROM custom (mis. RYUUI ingres) yang berisi images/super.img.zst
@@ -17,6 +17,8 @@ Perubahan (idempoten, gagal kalau baris acuan tidak ditemukan = versi toolkit be
 6. Donor zip gaya xiaomi.eu / ROM custom MIUI (images/super.img*, mis. LUXE, RYUUI) diterima walau
    nama file tanpa "xiaomi.eu" (toolkit asli juga salah mengecek isi zip base, bukan donor), dan
    super.img utuh / .zst / potongan sparse dibuka seperti base.
+7. Kernel custom (env PORT_BOOT_IMG): sebelum paket dibangun, scripts/miui_boot_hook.sh memasang
+   kernel itu ke boot.img base HANYA kalau CRC simbolnya cocok dengan modul vendor base.
 """
 import sys
 
@@ -56,7 +58,11 @@ def patch(path):
         'elif [[ $port_android_version == "15" ]];then\n'
         '    base_device_code=V$(echo $base_rom_version | cut -d "." -f 5 | cut -c 2-)\n'
         'elif [[ $port_android_version == "13" ]];then  ' + MARK + '\n'
-        '    base_device_code=T$(echo $base_rom_version | cut -d "." -f 5 | cut -c 2-)\n')
+        '    base_device_code=T$(echo $base_rom_version | cut -d "." -f 5 | cut -c 2-)\n'
+        'elif [[ $port_android_version == "16" ]];then  ' + MARK + ' HyperOS 3\n'
+        '    base_device_code=W$(echo $base_rom_version | cut -d "." -f 5 | cut -c 2-)\n'
+        'elif [[ $port_android_version == "17" ]];then  ' + MARK + '\n'
+        '    base_device_code=X$(echo $base_rom_version | cut -d "." -f 5 | cut -c 2-)\n')
 
     old = ('port_android_sdk=$(< build/portrom/images/system/system/build.prop grep '
            '"ro.system.build.version.sdk" |awk \'NR==1\' |cut -d \'=\' -f 2)\n')
@@ -103,9 +109,16 @@ def patch(path):
     rep('    simg2img build/portrom/images/super.img.* build/portrom/images/super.img\n'
         '    rm -rf build/portrom/images/super.img.*\n', super_block("portrom"))
 
+    rep('if [[ $pack_method == "aosp" ]];then\n',
+        MARK + ' kernel custom (dicek CRC vs modul vendor base) sebelum paket dibangun\n'
+        'if [[ -n ${PORT_BOOT_IMG:-} && -n ${PORT_BOOT_HOOK:-} ]]; then\n'
+        '    bash "$PORT_BOOT_HOOK" "$(pwd)" "$PORT_BOOT_IMG" || true\n'
+        'fi\n'
+        'if [[ $pack_method == "aosp" ]];then\n')
+
     open(path, "w", encoding="utf-8").write(s)
     print("port.sh ditambal: MIUI 14 (tanpa mi_ext), kode versi Android 13, cek versi Treble, nama paket, "
-          "super.img utuh/.zst (base & donor), donor zip ROM custom MIUI")
+          "super.img utuh/.zst (base & donor), donor zip ROM custom MIUI, hook kernel custom")
     return 0
 
 
