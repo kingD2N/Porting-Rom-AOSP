@@ -145,7 +145,7 @@ images/super.img.zst            super (system/system_ext/product donor + vendor/
 | `boot_img_url` | default boot.img D2N (5.10.271-gki-MIX); kosongkan = kernel ROM base |
 | `disable_encryption` | `true` untuk test build pertama |
 | `rw_mount` | `true` (hanya partisi EXT4 yang dibangun ulang: system, system_ext, product, vendor, odm. `vendor_dlkm` dari base tetap read-only) |
-| `debug_adb` | `true` selama testing (adb hidup sejak boot) |
+| `debug_adb` | `false` (default). `true` hanya untuk menyelidiki bootloop: adb + USB debugging hidup sejak boot tanpa konfirmasi (`ro.adb.secure=0`, `persist.sys.usb.config=mtp,adb`). Aplikasi bank / e-wallet (DANA, mobile banking) sering menolak jalan kalau USB debugging aktif |
 | `sepolicy_strict` | `true` (default) = build gagal kalau sepolicy gabungan error (pasti bootloop); `false` = cuma warning |
 | `recovery_img_url` | default TWRP D2N (`ALL-PROJECT-D2N` release `ingres`, `TWRP_PROJECT_recovery_A16_A17_.img`). Dicek: image boot Android dan tidak lebih besar dari partisi recovery. Kosongkan = recovery HP tidak disentuh |
 | `release_repo` | kosong = Artifacts. `owner/repo` = GitHub Release (secret `RELEASE_TOKEN`) |

@@ -24,7 +24,7 @@ EXT4_PARTITIONS=${EXT4_PARTITIONS:-"vendor odm system vendor_dlkm product system
 DISABLE_ENCRYPTION=${DISABLE_ENCRYPTION:-true}
 RW_MOUNT=${RW_MOUNT:-true}
 DISABLE_AVB=${DISABLE_AVB:-true}
-DEBUG_ADB=${DEBUG_ADB:-true}
+DEBUG_ADB=${DEBUG_ADB:-false}
 SUPER_SIZE=${SUPER_SIZE:-auto}
 BASE_TYPE=${BASE_TYPE:-auto}                # auto | aosp (ROM AOSP ingres) | hyperos (stock MIUI/HyperOS ingres)
 # yang diambil dari base ke partisi port:

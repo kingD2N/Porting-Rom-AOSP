@@ -83,9 +83,9 @@ on:
         default: true
         type: boolean
       debug_adb:
-        description: "ADB aktif sejak boot (untuk logcat saat bootloop)"
+        description: "ADB/USB debugging aktif sejak boot tanpa konfirmasi (hanya untuk logcat saat bootloop). Aplikasi bank/e-wallet (DANA dll) bisa menolak jalan kalau aktif"
         required: false
-        default: true
+        default: false
         type: boolean
       sepolicy_strict:
         description: "Build GAGAL kalau sepolicy gabungan (system donor + vendor ingres) tidak bisa di-compile"
