@@ -111,7 +111,7 @@ base_extract_sub() {
         "${EXTRACT_EROFS:-$BIN/extract.erofs}" -i "$img" -X "$sub" -o "$out" >/dev/null 2>&1 \
             || "$BIN/extract.erofs" -i "$img" -X "$sub" -o "$out" >/dev/null 2>&1 || true
     else
-        python3 "$PYBIN/imgextractor/imgextractor.py" "$img" "$out" >/dev/null 2>&1 || true
+        python3 "$SCRIPT_DIR/imgextractor_compat.py" "$PYBIN/imgextractor/imgextractor.py" "$img" "$out" >/dev/null 2>&1 || true
     fi
     return 0
 }

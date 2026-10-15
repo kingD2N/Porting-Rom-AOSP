@@ -232,6 +232,7 @@ addons/dolby/                            sepolicy hal_dms (CIL) + sepolicy-clien
 scripts/make_ota.py                      bangun zip OTA A/B (payload.bin, payload_properties.txt, apex_info.pb, metadata)
 scripts/lp_tool.py                       metadata super & payload.bin
 scripts/lpunpack_compat.py               jalankan lpunpack.py toolkit di Python 3.13+
+scripts/imgextractor_compat.py           jalankan imgextractor.py toolkit tanpa salah deteksi "MOTO" (image ext4 terhapus)
 scripts/fstab_patch.py                   patch fstab
 scripts/prop_merge.py                    salin props hardware (allowlist)
 scripts/prop_effective.py                props yang berlaku saat boot (urutan load init)

@@ -122,7 +122,28 @@ def patch(path):
     return 0
 
 
+def patch_imgextractor(tk):
+    """8. imgextractor.py: deteksi MOTO hanya kalau superblock ext4 tidak di offset normal
+    (lihat scripts/imgextractor_compat.py; image ext4 yang memuat byte "MOTO" ikut terhapus)."""
+    import os
+    p = os.path.join(tk, "bin", "imgextractor", "imgextractor.py")
+    if not os.path.isfile(p):
+        return
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from imgextractor_compat import OLD, NEW
+    s = open(p, encoding="utf-8").read()
+    if NEW in s:
+        return
+    if OLD not in s:
+        print("imgextractor.py: pola MOTO tidak ditemukan, tidak ditambal")
+        return
+    open(p, "w", encoding="utf-8").write(s.replace(OLD, NEW, 1))
+    print("imgextractor.py ditambal: deteksi MOTO aman untuk image ext4 biasa")
+
+
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         raise SystemExit(__doc__)
-    sys.exit(patch(sys.argv[1].rstrip("/") + "/port.sh"))
+    tk = sys.argv[1].rstrip("/")
+    patch_imgextractor(tk)
+    sys.exit(patch(tk + "/port.sh"))

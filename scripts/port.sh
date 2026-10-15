@@ -488,7 +488,7 @@ extract_img() { # img out_root
                 tail -n 15 "$lg" >&2
             done ;;
         ext)
-            python3 "$PYBIN/imgextractor/imgextractor.py" "$img" "$root" > "$lg" 2>&1 || true
+            python3 "$SCRIPT_DIR/imgextractor_compat.py" "$PYBIN/imgextractor/imgextractor.py" "$img" "$root" > "$lg" 2>&1 || true
             if [[ -s $root/config/${name}_fs_config ]]; then
                 python3 "$SCRIPT_DIR/fsconfig_check.py" sanitize "$root" "$name" >> "$lg" 2>&1 || true
             fi
@@ -580,7 +580,7 @@ check_vintf() {
         "${EXTRACT_EROFS:-$BIN/extract.erofs}" -i "$img" -X system/etc/vintf -o "$tmp" >/dev/null 2>&1 \
             || "$BIN/extract.erofs" -i "$img" -X system/etc/vintf -o "$tmp" >/dev/null 2>&1 || true
     else
-        python3 "$PYBIN/imgextractor/imgextractor.py" "$img" "$tmp" >/dev/null 2>&1 || true
+        python3 "$SCRIPT_DIR/imgextractor_compat.py" "$PYBIN/imgextractor/imgextractor.py" "$img" "$tmp" >/dev/null 2>&1 || true
     fi
     for lv in $missing; do
         src=$(find "$tmp" -type f -path "*/etc/vintf/compatibility_matrix.$lv.xml" | head -n1)
@@ -622,7 +622,7 @@ vndk_compat() {
             "${EXTRACT_EROFS:-$BIN/extract.erofs}" -i "$B_IMG/$img.img" -X "$sub" -o "$tmp/$img" >/dev/null 2>&1 \
                 || "$BIN/extract.erofs" -i "$B_IMG/$img.img" -X "$sub" -o "$tmp/$img" >/dev/null 2>&1 || true
         else
-            python3 "$PYBIN/imgextractor/imgextractor.py" "$B_IMG/$img.img" "$tmp/$img" >/dev/null 2>&1 || true
+            python3 "$SCRIPT_DIR/imgextractor_compat.py" "$PYBIN/imgextractor/imgextractor.py" "$B_IMG/$img.img" "$tmp/$img" >/dev/null 2>&1 || true
         fi
     done
     found=$(find "$tmp" -type f -name "com.android.vndk.v$ver.*apex" | head -n1)
